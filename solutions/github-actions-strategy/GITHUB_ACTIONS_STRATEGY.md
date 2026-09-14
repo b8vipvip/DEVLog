@@ -1,140 +1,167 @@
-# GitHub Actions 策略 v2.0
+# GitHub Actions 策略 v3
 
 ## 目标
 
-GitHub Actions 的问题不能只靠一份“模板”解决。真正稳定的做法必须同时覆盖：新项目预防、老项目迁移、运行中资源治理、历史异常任务清理，以及策略落地后的验收。
+v3 把 GitHub Actions 治理从“模板”升级为持续运行的策略系统，覆盖：
 
-## 强制规则
+- 新项目预防；
+- 老项目迁移；
+- 同 PR 多代 CI 自动去重；
+- 测试/构建超时；
+- 历史卡死任务自动恢复；
+- 自动修复可确定的 Workflow 问题；
+- 修复后自动重新提交；
+- 自动修复无法继续时留下 Recovery Incident。
 
-### 1. 自动 CI / Test / Smoke 必须取消旧运行
+## 1. Workflow Guard
+
+普通 CI / Test / Smoke 必须：
 
 ```yaml
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 ```
 
-同一 PR 或同一 ref 产生新运行后，旧运行应立即退出，不能继续占用 Runner。
+每个 `runs-on` Job 必须有 `timeout-minutes`。推荐：
 
-### 2. 核心 Job 必须设置显式超时
+- Lint / 单元测试：10～20 分钟；
+- Docker / 构建 / Smoke：20～45 分钟；
+- Windows 大型安装器验证：30～45 分钟。
 
-建议范围：
+可恢复 Workflow 应保留 `workflow_dispatch`，以便 Recovery 对修复后的 ref 显式重新提交。
 
-- Lint / 单元测试：10～20 分钟
-- Docker / 构建 / Smoke：20～45 分钟
-- Release / Deploy：可以更长，但不能无限运行
+Release / Deploy / Publish / Store Package 属于有副作用任务，使用独立串行 concurrency group、`cancel-in-progress: false`，但最长不能超过 180 分钟。
 
-Python pytest 应另外配置单测试超时，例如 `pytest-timeout`，避免一个测试死锁拖死整个 Job。
+## 2. Actions Policy Check
 
-### 3. 权限最小化
+部署 `.github/workflows/actions-policy-check.yml` 与 `.github/scripts/validate_actions_strategy.py`。
 
-普通 CI 默认使用：
+Policy Check 对新增/修改 Workflow 强制检查：
 
-```yaml
-permissions:
-  contents: read
+- 明确 `permissions`；
+- 明确 `concurrency`；
+- 普通任务 `cancel-in-progress: true`；
+- 发布类 `cancel-in-progress: false`；
+- Job 显式 timeout；
+- `workflow_dispatch` 恢复入口；
+- Debug / diagnostic / one-shot / tmp Workflow 只能手动运行。
+
+老 Workflow 可以分阶段迁移，但只要再次修改，就必须满足 v3。
+
+## 3. Actions Governor
+
+Governor 每 10 分钟扫描仓库真实的 `in_progress` 与 `queued` 运行。
+
+### 3.1 重复运行
+
+普通任务按 `workflow + branch + event` 去重，只保留最新一条。被更新 Commit 替代的旧任务直接取消，不恢复旧 Commit，因为最新运行本身已经是重新提交。
+
+### 3.2 异常长运行
+
+- 普通任务：45 分钟硬上限；
+- Release / Deploy / Publish / Store Package：180 分钟；
+- Strategy 内部任务：20 分钟。
+
+### 3.3 历史任务
+
+Governor 查询当前仓库状态，所以策略上线之前已经启动的异常任务也能被识别。
+
+对于真正 stale/historical 的任务，v3 **禁止只 Cancel 后结束**：Cancel 释放 Runner 以后必须 dispatch `Actions Recovery`。
+
+## 4. Actions Recovery：自动修复 + 重新提交
+
+部署 `.github/workflows/actions-recovery.yml` 与 `.github/scripts/actions_strategy_autofix.py`。
+
+Recovery 流程：
+
+1. 读取源 run metadata 和日志。
+2. 从当前默认分支加载最新版 v3 修复逻辑，因此可处理旧 Commit。
+3. 自动修复安全、机械可确定的 Workflow 问题：
+   - 缺少 `workflow_dispatch`；
+   - 缺少 `permissions`；
+   - 缺少 `concurrency`；
+   - Job 缺少 `timeout-minutes`。
+4. 如果仓库提供 `.github/actions-recovery.sh`，执行项目级确定性修复。该 hook 应为幂等规则，并可读取 `ACTIONS_RECOVERY_LOG`。
+5. 有修改时创建 `actions-recovery/run-<run_id>` 分支并提交 Recovery PR。
+6. 对普通无副作用 Workflow，显式 dispatch 修复后的 ref，完成重新提交。
+7. 如果没有安全修改，允许最多一次 fresh-run rerun，用于 Runner / 网络 / 临时环境故障。
+8. 自动恢复预算耗尽时创建 `[Actions Recovery]` Issue，不允许无限重跑。
+
+## 5. “自动修复”的安全定义
+
+Strategy v3 不假装能凭空推断任意业务代码的正确实现。自动修复分两层：
+
+### 通用修复层
+
+由 `actions_strategy_autofix.py` 处理所有可机械确定的 GitHub Actions 配置缺陷。
+
+### 项目修复层
+
+由 `.github/actions-recovery.sh` 编码项目已经确认过的故障模式。例如某类 fixture、生成文件、缓存状态、锁文件或配置迁移问题，只要能写成幂等规则，就可以自动修改并重新提交。
+
+如果故障属于全新的业务逻辑错误、且没有确定性修复规则，v3 会停止自动猜测并建立 Recovery Incident。
+
+## 6. 发布类安全边界
+
+Release / Deploy / Publish / Store Package 可能对外部系统产生不可逆副作用，禁止盲目自动重放。
+
+v3 可以：
+
+- 自动修复其 Workflow 策略问题；
+- 创建修复 PR；
+- 建立 Recovery Incident。
+
+但正式发布/部署的再次执行需要明确批准，避免重复 Release、重复部署或重复上传。
+
+## 7. 老项目标准恢复链路
+
+```text
+历史卡死 run
+    ↓
+Governor 判定 stale
+    ↓
+Cancel 释放资源
+    ↓
+Actions Recovery 自动取证
+    ↓
+通用修复 + 项目 hook
+    ↓
+Recovery branch / PR
+    ↓
+普通 Workflow 显式 redispatch
+    ↓
+若无修改 → fresh-run rerun 1 次
+    ↓
+仍失败 → Recovery Issue
 ```
 
-只有仓库级治理工作流需要 `actions: write`；只有发布任务需要 `contents: write`。
+## 8. 新项目接入
 
-### 4. 临时 Debug Workflow 必须手动触发
-
-临时诊断完成后必须改成：
-
-```yaml
-on:
-  workflow_dispatch:
-```
-
-并设置较短的 `timeout-minutes`。禁止 Debug Workflow 长期跟随所有 push / PR 自动运行。
-
-### 5. Release / Deploy 是受控例外
-
-Release / Deploy / Publish / Store Package 可以使用：
-
-```yaml
-cancel-in-progress: false
-```
-
-因为发布过程通常不应该被新提交直接打断，但它们必须：
-
-- 使用独立串行 concurrency group；
-- 仍然受仓库级 Governor 180 分钟硬上限保护；
-- 不得无限等待其它 Workflow。
-
-## Actions Governor：仓库级强制治理
-
-每个需要长期运行 Actions 的项目都应部署 `.github/workflows/actions-governor.yml`。
-
-Governor 每 10 分钟扫描仍处于 `in_progress` 或 `queued` 的运行，并执行两层治理。
-
-### 第一层：重复运行清理
-
-对普通工作流，以 `workflow name + head branch + event` 为键，只保留最新一条活动运行，旧的重复运行自动取消。
-
-这可以解决：
-
-- 同一 PR 在短时间内连续提交多次；
-- CI #1735、#1736、#1737、#1738 同时运行；
-- 旧 Commit 的测试仍然占 Runner，而新 Commit 已经开始测试。
-
-### 第二层：异常长运行清理
-
-默认硬上限：
-
-- 普通工作流：45 分钟；
-- Release / Deploy / Publish / Store Package：180 分钟。
-
-达到阈值仍未结束时，Governor 调用 GitHub Actions Cancel API 自动取消。
-
-### 历史任务兼容
-
-Governor 查询的是仓库“当前仍在运行的任务”，而不是只管理策略启用后的任务。因此：
-
-- 策略启用前已经卡住一小时的 CI；
-- 旧 YAML 启动的任务；
-- 没有 `timeout-minutes` 的历史运行；
-
-都可以被新 Governor 识别并取消。
-
-这正是老项目事故恢复与新项目预防的连接点。
-
-## 老项目标准迁移顺序
-
-1. 新增 Actions Governor。
-2. 给主 CI / Test / Smoke 增加 concurrency 与 `cancel-in-progress: true`。
-3. 给核心 Job 增加 `timeout-minutes`。
-4. 给 pytest / 测试框架增加单测试超时。
-5. 临时 Debug Workflow 改为手动触发。
-6. Release / Deploy 使用独立串行 concurrency group。
-7. 合并策略后，让 Governor 自动清理历史异常运行。
-8. 再触发一轮正式 CI，确认只剩最新一代运行。
-
-## 新项目标准接入顺序
-
-新仓库第一次建立 Actions 时直接套用本目录模板：
+至少复制：
 
 1. `templates/ci.yml`
 2. `templates/actions-governor.yml`
-3. 有临时排障时使用 `templates/debug.yml`
-4. 有发布需求时使用 `templates/release.yml`
+3. `templates/actions-recovery.yml`
+4. `templates/actions-policy-check.yml`
+5. `scripts/actions_strategy_autofix.py` → `.github/scripts/actions_strategy_autofix.py`
+6. `scripts/validate_actions_strategy.py` → `.github/scripts/validate_actions_strategy.py`
 
-## 验收标准
+有已知可确定修复模式时，再新增 `.github/actions-recovery.sh`。
 
-只有以下条件全部满足，才能认为策略真正生效：
+## 9. 验收标准
 
-- 同一 PR 连续 push 两次，旧 CI 自动 `cancelled`。
-- 普通 CI 不会无限运行，仓库级最大 45 分钟。
-- 发布类工作流最大 180 分钟。
-- 单个测试死锁不会拖死整个 Job。
-- 策略启用之前遗留的长时间运行任务可以自动清掉。
-- 临时 Debug 不再随所有 push / PR 自动触发。
-- 最新正式运行最终明确显示 `success`、`failure`、`cancelled` 或 `timed_out`，而不是长期 `in_progress`。
+只有同时满足以下条件才算 v3 落地：
 
-## 禁止事项
-
-- 不允许为了“看它会不会自己结束”让已确认异常的 CI 连续运行数小时。
-- 不允许同一 PR 的多代 CI 同时长期占用 Runner。
-- 不允许用反复 Re-run 代替根因修复。
-- 不允许把一次性 Debug Workflow 永久保留为自动触发。
-- 不允许 Release 任务没有任何资源上限。
+- 同一 PR 连续 push，旧普通 CI 自动取消；
+- 新增/修改 Workflow 必须通过 Policy Check；
+- 普通任务不存在无限 `in_progress`；
+- 历史 stale run 被取消后能看到 Recovery 接管；
+- 可安全修复的问题会产生 repair branch/PR；
+- 修复后的普通 Workflow 会重新 dispatch；
+- 没有修复内容时只允许一次 fresh rerun；
+- 自动恢复达到安全边界后会生成 Recovery Issue；
+- 发布类不会被自动盲目重放。
