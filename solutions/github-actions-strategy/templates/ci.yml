@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Add runtime setup here, for example setup-python / setup-node.
+
+      - name: Run tests
+        run: |
+          # Python example:
+          # python -m pip install -r requirements.txt pytest-timeout
+          # pytest -q --timeout=120
+
+          # Node example:
+          # npm ci
+          # npm test
+
+          echo 'Replace this step with project tests.'
