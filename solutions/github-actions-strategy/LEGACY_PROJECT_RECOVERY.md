@@ -1,22 +1,82 @@
-# 老项目 GitHub Actions 恢复与迁移 SOP
+# 老项目 GitHub Actions 恢复与迁移 SOP（Strategy v3）
 
-本 SOP 用于已经出现以下现象的仓库：同一 PR 多代 CI 同时运行、某个测试长时间不返回、Actions 列表里存在一小时以上仍为 `in_progress` 的旧任务、临时 Workflow 数量过多、Runner 被历史任务持续占用。
+本 SOP 用于已经出现同一 PR 多代 CI 同时运行、pytest/npm/cargo/Docker 长时间不返回、历史 `in_progress` / `queued` 任务占用资源、临时 Workflow 泛滥等问题的仓库。
 
-## A. 先止损
+## A. 先部署 v3 控制面
 
-1. 不再继续手工反复 Re-run。
-2. 加入 `actions-governor.yml`。
-3. Governor 合并到主分支后，立即执行一次，并持续每 10 分钟执行。
-4. 普通活动任务超过 45 分钟自动取消；发布类超过 180 分钟自动取消。
-5. 同一普通 workflow + branch + event 只保留最新活动任务。
+必须先加入：
 
-Governor 能清理策略落地之前启动的任务，因此不需要等待历史异常任务自己结束。
+- `.github/workflows/actions-governor.yml`
+- `.github/workflows/actions-recovery.yml`
+- `.github/workflows/actions-policy-check.yml`
+- `.github/scripts/actions_strategy_autofix.py`
+- `.github/scripts/validate_actions_strategy.py`
+- `.github/ACTIONS_STRATEGY.md`
 
-## B. 再修主 Workflow
+Governor 每 10 分钟扫描，普通任务 45 分钟上限，发布类 180 分钟上限。
 
-对 CI / Test / Smoke：
+## B. 历史卡死任务不能只 Cancel
+
+Strategy v3 的历史恢复必须遵循：
+
+```text
+stale run
+  ↓
+Governor Cancel，先释放 Runner
+  ↓
+Recovery 收集 metadata + logs
+  ↓
+自动修复 Workflow 策略缺陷
+  ↓
+可选项目级 actions-recovery.sh
+  ↓
+Recovery branch / PR
+  ↓
+普通 Workflow 对修复 ref 重新 dispatch
+  ↓
+若没有修改，只允许 fresh rerun 1 次
+  ↓
+仍不能恢复则自动创建 Recovery Issue
+```
+
+如果旧任务已经被更新 Commit 替代，则只取消旧 duplicate，因为新运行已经完成“重新提交”，禁止复活过时代码。
+
+## C. 项目级自动修复 Hook
+
+仓库可添加：
+
+```text
+.github/actions-recovery.sh
+```
+
+Recovery 会从当前默认分支读取这个 hook，并在异常任务的源代码工作区执行。可以使用这些环境变量：
+
+- `ACTIONS_RECOVERY_LOG`：源 run 日志文件；
+- `SOURCE_RUN_ID`；
+- `SOURCE_WORKFLOW_NAME`；
+- `SOURCE_BRANCH`；
+- `RECOVERY_REASON`。
+
+Hook 必须满足：
+
+1. **确定性**：只修复已经明确识别的故障模式；
+2. **幂等**：执行两次不会不断产生新改动；
+3. **最小修改**：不得趁恢复流程顺便做无关重构；
+4. **可验证**：修改后由 Recovery 分支/PR 和重新 dispatch 验证。
+
+适合自动编码的例子：已知 fixture 状态缺失、生成文件未同步、固定配置迁移、锁文件恢复、某类缓存/临时文件清理。全新业务逻辑错误不应由 shell 脚本猜测修复。
+
+## D. 主 Workflow 迁移
+
+普通 CI/Test/Smoke：
 
 ```yaml
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
 permissions:
   contents: read
 
@@ -29,29 +89,15 @@ jobs:
     timeout-minutes: 20
 ```
 
-如果是 pytest：
+pytest 应再增加单测试 timeout，例如 `pytest -q --timeout=120`。
 
-```bash
-python -m pip install pytest-timeout
-pytest -q --timeout=120
-```
+## E. Debug Workflow
 
-如果是 npm / cargo / Docker 等，也必须通过 Job 级 `timeout-minutes` 提供上限。
+Debug/diagnostic/one-shot/tmp Workflow 排障结束后只能保留 `workflow_dispatch`，禁止长期随 push / pull_request 自动执行。
 
-## C. 清理临时诊断 Workflow
+## F. Release / Deploy
 
-排障时创建的临时 Workflow 完成使命后必须改成：
-
-```yaml
-on:
-  workflow_dispatch:
-```
-
-或直接删除。禁止长期保留为 `push` / `pull_request` 自动触发。
-
-## D. 处理 Release / Deploy
-
-发布任务一般不使用 `cancel-in-progress: true`，避免正在发布时被下一次提交打断。推荐：
+发布类不能盲目自动重放，因为可能造成重复发布/部署：
 
 ```yaml
 concurrency:
@@ -59,19 +105,17 @@ concurrency:
   cancel-in-progress: false
 ```
 
-同时仍由 Governor 提供 180 分钟硬上限。
+Governor 仍提供 180 分钟上限。Recovery 可以修 Workflow、提交 PR、建立 Incident，但真正再次发布需要明确批准。
 
-## E. 验收
+## G. 验收
 
-迁移完成后做一次并发验证：
+迁移完成后验证：
 
-1. 在同一测试分支连续 push 两个很小的提交。
-2. 第二次 CI 开始后，第一次 CI 应自动变为 `cancelled`。
-3. 检查 Actions 页面只保留最新一代普通 CI 继续运行。
-4. 人为制造一个可控的等待测试时，应在测试级或 Job 级超时被终止。
-5. 检查 Governor 运行日志，确认能够扫描活动任务并输出取消原因。
-
-## chat2api / GPTWork 案例
-
-- chat2api 曾出现同一 PR 的多条 CI 同时保持 `in_progress`，并有运行超过一小时的 pytest 任务；这类历史任务应由 Governor 自动清理。
-- GPTWork 的问题更多表现为真实测试失败，而不是无限运行；策略负责防止失败任务演化成资源堆积，但不会把真实代码错误“自动变绿”。
+1. 同一 PR 连续 push，两代普通 CI 中旧任务应自动取消。
+2. Policy Check 对新增/修改 Workflow 生效。
+3. 人为制造可控等待，Job/test timeout 能终止。
+4. Governor 能看到并清理历史 stale run。
+5. stale run 被清理后能看到 Actions Recovery 被 dispatch。
+6. 人为准备一个缺少 timeout/concurrency 的测试 Workflow，Recovery 应能生成修复 branch/PR。
+7. 可恢复普通 Workflow 应能在修复 ref 上重新 dispatch。
+8. 无修复内容的异常 run 最多自动 rerun 一次；再次异常应生成 Recovery Issue，而不是无限循环。
