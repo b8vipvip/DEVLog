@@ -1,6 +1,6 @@
 # DEVLog
 
-个人开发问题、排障记录、解决方案与可复用模板仓库。
+个人开发问题、排障记录、解决方案与可复用策略仓库。
 
 ## 目录约定
 
@@ -9,6 +9,6 @@
 
 ## 当前内容
 
-- `solutions/github-actions-standard-template/`：GitHub Actions 标准模板与规范，用于避免重复 CI、无限等待、临时 Workflow 泛滥、重型任务误触发及 Release 并发冲突。
+- `solutions/github-actions-strategy/`：GitHub Actions 策略。覆盖新项目预防、老项目迁移、并发取消、Job 超时、历史异常任务自动清理、临时 Debug 治理、Release 串行与仓库级 Actions Governor。
 
 后续遇到其它开发、部署、CI/CD、服务器、自动化等问题，可继续在 `solutions/` 下新增独立主题目录。

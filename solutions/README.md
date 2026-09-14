@@ -1,10 +1,10 @@
 # Solutions 索引
 
-这里用于长期归档开发过程中遇到的问题、根因分析、修复方法和可复用模板。
+这里用于长期归档开发过程中遇到的问题、根因分析、修复方法和可复用策略。
 
 ## 已归档
 
-- [`github-actions-standard-template/`](./github-actions-standard-template/)：GitHub Actions 标准模板。重点解决重复 CI、旧 PR 任务不取消、测试无限等待、临时 Debug Workflow 泛滥、重型任务误触发、Release 并发冲突等问题。
+- [`github-actions-strategy/`](./github-actions-strategy/)：GitHub Actions 策略。重点解决重复 CI、旧 PR 任务不取消、测试无限等待、历史异常任务持续占用资源、临时 Debug Workflow 泛滥、重型任务误触发、Release 并发冲突等问题，同时包含老项目恢复 SOP 与 Actions Governor 自动治理模板。
 
 ## 后续新增建议
 
@@ -12,7 +12,7 @@
 
 ```text
 solutions/
-├── github-actions-standard-template/
+├── github-actions-strategy/
 ├── nginx-502-troubleshooting/
 ├── python-dependency-conflict/
 └── windows-service-recovery/

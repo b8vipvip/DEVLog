@@ -1,0 +1,25 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: project-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and publish
+        run: |
+          echo 'Replace with release build and publish commands.'
+          echo 'The repository Actions Governor still applies a 180-minute hard cap.'
