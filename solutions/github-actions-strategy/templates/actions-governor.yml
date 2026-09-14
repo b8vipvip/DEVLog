@@ -35,22 +35,31 @@ jobs:
           repo="$GITHUB_REPOSITORY"
           current_run="$GITHUB_RUN_ID"
           now_epoch="$(date -u +%s)"
-          active='[]'
+          runs_file="$(mktemp)"
+          trap 'rm -f "$runs_file"' EXIT
 
-          for status in in_progress queued; do
-            payload="$(gh api "repos/${repo}/actions/runs?status=${status}&per_page=100")"
-            rows="$(jq -c '.workflow_runs' <<<"$payload")"
-            active="$(jq -c --argjson rows "$rows" '. + $rows' <<<"$active")"
-          done
+          # Stream only the fields required by the governor. Avoid passing complete
+          # workflow-run JSON through shell arguments, which can exceed ARG_MAX in
+          # repositories with many simultaneous Actions runs.
+          {
+            for status_filter in in_progress queued; do
+              gh api --paginate \
+                "repos/${repo}/actions/runs?status=${status_filter}&per_page=100" \
+                --jq '.workflow_runs[] | [
+                  (.created_at // ""),
+                  (.id | tostring),
+                  (.workflow_id | tostring),
+                  (.name // ""),
+                  (.head_branch // ""),
+                  (.event // ""),
+                  (.status // ""),
+                  (.run_started_at // .created_at // "")
+                ] | join("\u001f")'
+            done
+          } | LC_ALL=C sort -r > "$runs_file"
 
-          mapfile -t runs < <(
-            jq -r '
-              sort_by(.created_at) | reverse | .[] |
-              [(.id|tostring), (.name//""), (.head_branch//""), (.event//""), (.status//""), (.run_started_at//.created_at)] |
-              @tsv
-            ' <<<"$active"
-          )
-
+          scanned_count="$(wc -l < "$runs_file" | tr -d ' ')"
+          cancelled_count=0
           declare -A seen=()
           declare -A cancelled=()
 
@@ -64,26 +73,27 @@ jobs:
             [[ -n "${cancelled[$id]:-}" ]] && return 0
             if gh api --method POST "repos/${repo}/actions/runs/${id}/cancel" >/dev/null 2>&1; then
               cancelled[$id]=1
+              cancelled_count=$((cancelled_count + 1))
               echo "::notice::Cancelled run ${id} (${name}): ${reason}"
             else
               echo "::warning::Run ${id} (${name}) could not be cancelled; it may already have completed."
             fi
           }
 
-          for row in "${runs[@]}"; do
-            IFS=$'\t' read -r id name branch event status started <<<"$row"
+          while IFS=$'\x1f' read -r created id workflow_id name branch event status started; do
+            [[ -z "$id" ]] && continue
             [[ "$id" == "$current_run" ]] && continue
             protected_serial_workflow "$name" && continue
-            key="${name}|${branch}|${event}"
+            key="${workflow_id}|${branch}|${event}"
             if [[ -n "${seen[$key]:-}" ]]; then
               cancel_run "$id" "superseded duplicate; newer run ${seen[$key]} is active" "$name"
             else
               seen[$key]="$id"
             fi
-          done
+          done < "$runs_file"
 
-          for row in "${runs[@]}"; do
-            IFS=$'\t' read -r id name branch event status started <<<"$row"
+          while IFS=$'\x1f' read -r created id workflow_id name branch event status started; do
+            [[ -z "$id" ]] && continue
             [[ "$id" == "$current_run" ]] && continue
             [[ -n "${cancelled[$id]:-}" ]] && continue
             started_epoch="$(date -u -d "$started" +%s)"
@@ -93,6 +103,6 @@ jobs:
             if (( age_minutes >= max_minutes )); then
               cancel_run "$id" "stale ${status} run aged ${age_minutes}m (limit ${max_minutes}m)" "$name"
             fi
-          done
+          done < "$runs_file"
 
-          echo "Actions Governor complete. Active runs scanned: ${#runs[@]}; cancelled: ${#cancelled[@]}."
+          echo "Actions Governor complete. Active runs scanned: ${scanned_count}; cancelled: ${cancelled_count}."
