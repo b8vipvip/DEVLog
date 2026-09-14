@@ -1,0 +1,22 @@
+name: Manual Debug
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-debug-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Diagnostic commands
+        run: |
+          echo 'Put temporary diagnostics here.'
+          echo 'Do not convert this workflow to permanent push/pull_request triggering.'
