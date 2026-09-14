@@ -4,7 +4,8 @@
 
 ## 已归档
 
-- [`github-actions-strategy/`](./github-actions-strategy/)：GitHub Actions 策略。重点解决重复 CI、旧 PR 任务不取消、测试无限等待、历史异常任务持续占用资源、临时 Debug Workflow 泛滥、重型任务误触发、Release 并发冲突等问题，同时包含老项目恢复 SOP 与 Actions Governor 自动治理模板。
+- [`github-agent/`](./github-agent/)：**GitHub Agent**。原“GitHub Actions 策略”已正式更名。重点解决重复 CI、旧 PR 任务不取消、测试无限等待、历史异常任务持续占用资源、临时 Debug Workflow 泛滥、重型任务误触发、Release 并发冲突，并提供 Recovery、确定性自动修复、Recovery PR 和可选 coding-agent 智能修复委派。
+- [`github-actions-strategy/`](./github-actions-strategy/)：旧名称兼容目录，暂时保留以避免历史链接失效。
 
 ## 后续新增建议
 
@@ -12,7 +13,7 @@
 
 ```text
 solutions/
-├── github-actions-strategy/
+├── github-agent/
 ├── nginx-502-troubleshooting/
 ├── python-dependency-conflict/
 └── windows-service-recovery/
