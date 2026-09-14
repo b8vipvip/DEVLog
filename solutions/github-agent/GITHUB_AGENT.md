@@ -1,101 +1,98 @@
 # GitHub Agent v3
 
-GitHub Agent v3 是原“GitHub Actions 策略 v3”的正式新名称。它以 GitHub Actions 作为执行底座，在仓库内提供 **预防、检查、运行时治理、历史异常恢复、确定性自动修复和可选 AI 代码修复委派**。
+GitHub Agent v3 是原“GitHub Actions 策略 v3”的正式新名称。它以 GitHub Actions 作为执行底座，在仓库内提供 **预防、检查、运行时治理、历史异常恢复、确定性自动修复和 AI Repair Brief 交接**。
+
+GitHub Agent **不接入、不调用 coding-agent provider**。当问题需要理解业务代码时，Agent 只负责把问题整理完整，由用户随后让自己选择的 AI 读取并修复。
 
 ## 1. GitHub 原生提供什么
 
-GitHub Actions 原生能够：
-
-- 读取 Workflow / Job 状态与日志；
-- Cancel 运行；
-- Re-run 整个 Workflow、失败 Job 或指定 Job；
-- 通过 `workflow_dispatch` 重新触发工作流；
-- 使用仓库权限写分支、提交、PR、Issue（取决于 token 权限）。
-
-这些能力属于“执行与控制”，不等于“理解代码并自动修复”。GitHub Actions 本身不会凭日志自动推断任意业务代码应该怎么改。
-
-GitHub 另有 Copilot cloud agent、GitHub Agentic Workflows 等 coding-agent 能力，可以分析失败、修改代码并提交分支/PR。GitHub Agent 可以把这类 coding agent 作为可选的智能修复 provider，但它们不是 Actions 自带的通用自动修复器。
+GitHub Actions 原生能够读取 Workflow/Job 状态与日志、Cancel、Re-run、workflow_dispatch，并在权限允许时写分支、提交、PR、Issue。这些属于运行与控制能力，不等于理解代码并自动修复。
 
 ## 2. GitHub Agent 的修复分层
 
 ### L0：运行控制
 
-发现重复或 stale run 后先释放 Runner：Cancel / 去重 / 超时保护。
+发现 duplicate / stale run 后先释放 Runner：Cancel、去重、超时保护。
 
 ### L1：确定性 Workflow 修复
 
-`actions_strategy_autofix.py` 负责可以机械判断的缺陷，例如：
-
-- 缺少 `workflow_dispatch`；
-- 缺少最小 `permissions`；
-- 缺少 `concurrency`；
-- 普通任务缺少 `cancel-in-progress: true`；
-- 发布类任务缺少串行保护；
-- `runs-on` Job 缺少 `timeout-minutes`。
-
-这类修复无需 AI，可以自动创建 recovery branch / PR，并重新提交普通 Workflow 验证。
+`actions_strategy_autofix.py` 负责可以机械判断的缺陷，例如缺少 `workflow_dispatch`、最小 `permissions`、`concurrency`、`cancel-in-progress`、发布串行保护和 Job `timeout-minutes`。
 
 ### L2：项目确定性代码修复
 
-项目可提供 `.github/actions-recovery.sh`。当某个业务/测试故障已经建立明确、幂等的修复规则时，GitHub Agent 可根据 `ACTIONS_RECOVERY_LOG` 自动修改源代码、测试或配置，然后提交 Recovery PR。
+项目可提供 `.github/actions-recovery.sh`。只有某个业务/测试故障已经形成明确、幂等修复规则时，Agent 才自动修改源代码、测试或配置，然后提交 Recovery PR。
 
-典型适用：
+### L3：AI Repair Brief
 
-- 某 fixture 必须补固定 metadata；
-- 某测试需要固定 timeout；
-- 某生成文件需要重新同步；
-- 某已知版本兼容问题需要固定替换。
+如果问题需要业务理解、跨文件推理或新的代码修法，Agent 不猜、不调用外部 coding agent，而是创建：
 
-### L3：AI 代码修复
+`[GitHub Agent][AI Repair] <workflow> run <run_id>`
 
-如果问题需要理解业务逻辑、跨文件推理或根据日志设计新修法，确定性脚本不应该猜测。此时可以委派 coding-agent provider，例如：
+标准 Issue 至少包含：
 
-- GitHub Copilot cloud agent；
-- GitHub Agentic Workflows 支持的 Copilot CLI / Codex / Claude Code / Gemini CLI 等 coding agent。
+- Source Run / Workflow / Workflow path；
+- branch / commit SHA / event / attempt；
+- Governor / Recovery reason；
+- failed jobs / steps；
+- 高信号错误行摘要；
+- 是否检测到瞬时基础设施故障；
+- 是否属于 Release / Deploy 等有副作用任务；
+- 自动修复 PR（如有）；
+- Agent 已执行的 Cancel / repair / rerun 动作；
+- 给接手 AI 的任务、约束和验收标准。
 
-AI 修复必须遵守安全边界：
+用户随后让 AI 读取该 Issue、完整 Run 日志、对应 Commit 和仓库代码即可继续修复。
 
-- 只允许写 recovery/PR 分支，默认禁止直接写 `main`；
-- 必须重新执行原失败测试和 Policy Check；
-- 限制自动迭代次数；
-- Release / Deploy / Publish 等有外部副作用的任务不得自动盲目重放；
-- 失败或低置信度时升级为 Recovery Incident，保留人工审查点。
+详见 [`AI_REPAIR_HANDOFF.md`](./AI_REPAIR_HANDOFF.md)。
 
 ## 3. 标准恢复链路
 
 ```text
 失败 / 卡死 / 历史异常 run
           ↓
-Governor 取状态并判定 duplicate / stale
+Governor 判定 duplicate / stale
           ↓
-释放 Runner（Cancel）
+Cancel 释放 Runner
           ↓
-Recovery 收集 metadata + logs
+Recovery 收集 metadata + jobs + logs
           ↓
 L1 Workflow 确定性修复？
-   ├─ 是 → 修改 → recovery branch/PR → 重新 dispatch
+   ├─ 是 → Recovery PR → 验证
    └─ 否
           ↓
-L2 项目已知修复规则？
-   ├─ 是 → 修改代码/测试 → PR → CI
+L2 项目已知规则可修？
+   ├─ 是 → 修改代码/测试 → Recovery PR → CI
    └─ 否
           ↓
-L3 coding-agent provider 已启用？
-   ├─ 是 → AI 分析并改代码 → PR → CI → 限次迭代
-   └─ 否 → bounded rerun / Recovery Incident
+生成 AI Repair Brief Issue
+          ↓
+用户让 AI 读取 Issue / Run / 代码
+          ↓
+AI 创建修复分支 + PR + CI
 ```
 
-## 4. 为什么先 Cancel 再修
+## 4. 瞬时故障
 
-历史卡死任务已经占用 Runner。继续让它运行不会让修复代码“注入”到已启动的进程里，因此必须先释放资源，再基于原 run 的 SHA、分支、Workflow、日志创建新的修复提交和验证运行。
+只有日志明显匹配 Runner、网络、DNS、502/503/504、连接重置等瞬时故障时，Agent 才允许一次受限 fresh rerun。无论是否 rerun，只要没有确定性修复，问题仍必须生成 AI Repair Brief，防止故障被重跑掩盖。
 
-## 5. 重新运行不等于修复
+## 5. AI 接手后的强制边界
 
-GitHub 原生 Re-run 使用原始 `GITHUB_SHA` / `GITHUB_REF`。如果根因在代码里，单纯 rerun 只会重复执行原代码；因此 GitHub Agent 只有在判断为 Runner、网络或临时环境故障时才使用 bounded fresh rerun。代码缺陷应先生成新提交，再运行新的验证。
+接手 AI 应：
 
-## 6. 版本与兼容
+- 先确认源 Commit 是否已被更新提交取代；
+- 阅读完整日志，不只依赖摘要；
+- 使用独立修复分支，默认禁止直接写 `main`；
+- 运行原失败测试、相关回归测试、Policy Check；
+- PR 中写清根因、修改、验证、剩余风险；
+- Release / Deploy / Publish / Store Package 禁止盲目重放。
+
+## 6. 重新运行不等于修复
+
+Re-run 仍然执行原始代码。如果根因在代码里，单纯重跑只会重复错误。因此 GitHub Agent 只把 rerun 用作受限的瞬时环境恢复；代码问题必须产生新 Commit 后再验证。
+
+## 7. 版本与兼容
 
 - 对外名称：**GitHub Agent v3**。
 - 旧名称：GitHub Actions 策略 v3（历史称呼）。
-- `actions-*` / `actions_strategy_*` 文件名可暂时保留作为兼容实现名称，避免破坏历史工作流、已有引用或 required-check 上下文。
+- `actions-*` / `actions_strategy_*` 文件名继续作为内部兼容实现名称。
 - 新项目文档统一使用 `GITHUB_AGENT.md`。
