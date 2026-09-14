@@ -50,4 +50,4 @@ Issue 会包含 Source Run、Commit、失败 Job/Step、错误摘要、Agent 已
 
 为避免破坏已经部署到项目里的 Workflow、检查上下文和历史链接，模板与脚本内部仍可能保留 `actions-*` / `actions_strategy_*` 文件名。它们只是兼容名称，整个系统统一称为 **GitHub Agent**。
 
-旧目录 `solutions/github-actions-strategy/` 暂时保留作为历史兼容入口；新的规范入口是本目录 `solutions/github-agent/`。
+现行规范、脚本和模板统一位于仓库根目录的 `github-agent/`。
