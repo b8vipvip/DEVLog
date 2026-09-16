@@ -2,40 +2,31 @@ name: Actions Policy Check
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/**'
-      - '.github/scripts/**'
-      - '.github/ACTIONS_STRATEGY.md'
+    paths: ['.github/workflows/**', '.github/scripts/**', '.github/ACTIONS_STRATEGY.md', '.github/GITHUB_AGENT.md']
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/**'
-      - '.github/scripts/**'
-      - '.github/ACTIONS_STRATEGY.md'
+    paths: ['.github/workflows/**', '.github/scripts/**', '.github/ACTIONS_STRATEGY.md', '.github/GITHUB_AGENT.md']
   workflow_dispatch:
     inputs:
-      ref:
-        description: Optional ref to validate
-        required: false
-        type: string
+      ref: { description: Optional ref to validate, required: false, type: string }
 
 permissions:
   contents: read
 
 concurrency:
   group: actions-policy-check-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   policy:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
-      - name: Resolve changed workflow files
+      - name: Resolve workflows
         id: changed
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -51,7 +42,7 @@ jobs:
           fi
           sort -u -o /tmp/actions-workflows.txt /tmp/actions-workflows.txt
           echo "count=$(wc -l < /tmp/actions-workflows.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
-      - name: Enforce Strategy v3
+      - name: Enforce GitHub Agent v4
         if: steps.changed.outputs.count != '0'
         run: |
           mapfile -t workflows < /tmp/actions-workflows.txt

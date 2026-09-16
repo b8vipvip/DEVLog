@@ -1,14 +1,9 @@
 # DEVLog
 
-个人开发问题、排障记录、解决方案与可复用策略仓库。
+用于沉淀开发过程中可复用的问题排查、工程规则、自动化策略与解决方案。
 
-## 目录约定
+## GitHub Agent v4
 
-- 问题与解决方案按主题直接归档在仓库根目录。
-- 每个主题使用独立目录，目录内尽量包含：背景、症状、根因、解决方案、可复用模板、注意事项。
+[`github-agent/`](./github-agent/) 是当前 GitHub Actions 标准：PR-aware concurrency、Fast Gate -> Full Gate、path-aware heavy builds、Governor ghost/platform-ghost handling、失败分类、Single Release Authority、Node24-native action baseline，以及“Agent 自身也遵守目标仓库 PR-only policy”的治理规则。
 
-## 当前内容
-
-- [`github-agent/`](./github-agent/)：**GitHub Agent**。原“GitHub Actions 策略”已正式更名。覆盖新项目预防、老项目迁移、并发取消、Job 超时、历史异常任务治理、确定性自动修复、Recovery PR、重新提交，以及 AI Repair Brief 交接和 AI 自动发现入口。
-
-后续遇到其它开发、部署、CI/CD、服务器、自动化等问题，可继续在仓库根目录下新增独立主题目录。
+四个高频项目的审计和整改进度见 [`github-agent/AUDIT_2026-09-16_HIGH_FREQUENCY_REPOS.md`](./github-agent/AUDIT_2026-09-16_HIGH_FREQUENCY_REPOS.md)。

@@ -1,35 +1,25 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  test:
+  fast-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-
-      # Add runtime setup here, for example setup-python / setup-node.
-
-      - name: Run tests
-        run: |
-          # Python example:
-          # python -m pip install -r requirements.txt pytest-timeout
-          # pytest -q --timeout=120
-
-          # Node example:
-          # npm ci
-          # npm test
-
-          echo 'Replace this step with project tests.'
+      - uses: actions/checkout@v7
+      - run: echo 'syntax/lint/compile/focused contracts'
+  full-test:
+    needs: fast-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: echo 'full tests and path-aware heavy builds'

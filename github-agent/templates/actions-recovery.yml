@@ -3,249 +3,86 @@ name: Actions Recovery
 on:
   workflow_dispatch:
     inputs:
-      source_run_id: { description: Source workflow run ID, required: true, type: string }
-      source_workflow_id: { description: Source workflow ID, required: true, type: string }
-      source_workflow_name: { description: Source workflow name, required: true, type: string }
-      source_branch: { description: Source branch, required: false, type: string }
-      source_head_sha: { description: Source head SHA, required: true, type: string }
-      source_event: { description: Source event, required: false, type: string }
-      source_workflow_path: { description: Source workflow path, required: false, type: string }
-      source_run_attempt: { description: Source run attempt, required: false, default: '1', type: string }
-      recovery_reason: { description: Recovery reason, required: true, type: string }
-
+      source_run_id: { required: true, type: string }
+      source_workflow_id: { required: true, type: string }
+      source_workflow_name: { required: true, type: string }
+      source_branch: { required: false, type: string }
+      source_head_sha: { required: true, type: string }
+      source_event: { required: false, type: string }
+      source_workflow_path: { required: false, type: string }
+      source_run_attempt: { required: false, default: '1', type: string }
+      recovery_reason: { required: true, type: string }
 permissions:
   actions: write
   contents: write
   issues: write
   pull-requests: write
-
 concurrency:
   group: actions-recovery-${{ inputs.source_workflow_id }}-${{ inputs.source_run_id }}
   cancel-in-progress: true
-
 jobs:
   recover:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.source_head_sha }}
-          fetch-depth: 0
-
+      - uses: actions/checkout@v7
+        with: { ref: "${{ inputs.source_head_sha }}", fetch-depth: 0 }
       - name: Collect evidence
         id: evidence
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          SOURCE_WORKFLOW_PATH: ${{ inputs.source_workflow_path }}
+        env: { GH_TOKEN: "${{ github.token }}", SOURCE_RUN_ID: "${{ inputs.source_run_id }}", SOURCE_WORKFLOW_PATH: "${{ inputs.source_workflow_path }}" }
         run: |
-          set -Eeuo pipefail
-          mkdir -p .actions-recovery
+          set -Eeuo pipefail; mkdir -p .actions-recovery
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > .actions-recovery/run.json
           gh run view "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs > .actions-recovery/jobs.json 2>/dev/null || echo '{"jobs":[]}' > .actions-recovery/jobs.json
           gh run view "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --log > .actions-recovery/source.log 2>&1 || true
-          workflow_path="$SOURCE_WORKFLOW_PATH"
-          [[ -z "$workflow_path" ]] && workflow_path="$(jq -r '.path // ""' .actions-recovery/run.json)"
-          echo "workflow_path=$workflow_path" >> "$GITHUB_OUTPUT"
-          echo "run_attempt=$(jq -r '.run_attempt // 1' .actions-recovery/run.json)" >> "$GITHUB_OUTPUT"
-          echo "default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.default_branch')" >> "$GITHUB_OUTPUT"
-
-      - name: Load latest GitHub Agent repair rules
-        env:
-          DEFAULT_BRANCH: ${{ steps.evidence.outputs.default_branch }}
+          workflow_path="$SOURCE_WORKFLOW_PATH"; [[ -z "$workflow_path" ]] && workflow_path="$(jq -r '.path // ""' .actions-recovery/run.json)"
+          echo "workflow_path=$workflow_path" >> "$GITHUB_OUTPUT"; echo "run_attempt=$(jq -r '.run_attempt // 1' .actions-recovery/run.json)" >> "$GITHUB_OUTPUT"; echo "default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.default_branch')" >> "$GITHUB_OUTPUT"
+      - name: Load repair rules
+        env: { DEFAULT_BRANCH: "${{ steps.evidence.outputs.default_branch }}" }
         run: |
-          set -Eeuo pipefail
-          git fetch --no-tags origin "$DEFAULT_BRANCH"
-          git show "origin/$DEFAULT_BRANCH:.github/scripts/actions_strategy_autofix.py" > /tmp/actions_strategy_autofix.py
-          if git cat-file -e "origin/$DEFAULT_BRANCH:.github/actions-recovery.sh" 2>/dev/null; then
-            git show "origin/$DEFAULT_BRANCH:.github/actions-recovery.sh" > /tmp/actions-recovery.sh
-            chmod +x /tmp/actions-recovery.sh
-          fi
-
+          git fetch --no-tags origin "$DEFAULT_BRANCH"; git show "origin/$DEFAULT_BRANCH:.github/scripts/actions_strategy_autofix.py" > /tmp/actions_strategy_autofix.py
+          if git cat-file -e "origin/$DEFAULT_BRANCH:.github/actions-recovery.sh" 2>/dev/null; then git show "origin/$DEFAULT_BRANCH:.github/actions-recovery.sh" > /tmp/actions-recovery.sh; chmod +x /tmp/actions-recovery.sh; fi
       - name: Apply deterministic repair
         id: repair
-        env:
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          SOURCE_WORKFLOW_NAME: ${{ inputs.source_workflow_name }}
-          SOURCE_BRANCH: ${{ inputs.source_branch }}
-          SOURCE_HEAD_SHA: ${{ inputs.source_head_sha }}
-          SOURCE_EVENT: ${{ inputs.source_event }}
-          RECOVERY_REASON: ${{ inputs.recovery_reason }}
-          ACTIONS_RECOVERY_LOG: ${{ github.workspace }}/.actions-recovery/source.log
-          WORKFLOW_PATH: ${{ steps.evidence.outputs.workflow_path }}
+        env: { ACTIONS_RECOVERY_LOG: "${{ github.workspace }}/.actions-recovery/source.log", WORKFLOW_PATH: "${{ steps.evidence.outputs.workflow_path }}" }
         run: |
-          set -Eeuo pipefail
-          repaired=false
-          if [[ -n "$WORKFLOW_PATH" && -f "$WORKFLOW_PATH" ]]; then
-            before="$(git status --porcelain)"
-            python /tmp/actions_strategy_autofix.py "$WORKFLOW_PATH"
-            [[ "$(git status --porcelain)" != "$before" ]] && repaired=true
-          fi
-          if [[ -f /tmp/actions-recovery.sh ]]; then
-            before="$(git status --porcelain)"
-            bash /tmp/actions-recovery.sh
-            [[ "$(git status --porcelain)" != "$before" ]] && repaired=true
-          fi
+          set -Eeuo pipefail; repaired=false
+          if [[ -n "$WORKFLOW_PATH" && -f "$WORKFLOW_PATH" ]]; then before="$(git status --porcelain)"; python /tmp/actions_strategy_autofix.py "$WORKFLOW_PATH"; [[ "$(git status --porcelain)" != "$before" ]] && repaired=true; fi
+          if [[ -f /tmp/actions-recovery.sh ]]; then before="$(git status --porcelain)"; bash /tmp/actions-recovery.sh; [[ "$(git status --porcelain)" != "$before" ]] && repaired=true; fi
           echo "repaired=$repaired" >> "$GITHUB_OUTPUT"
-
       - name: Classify run
         id: classify
-        env:
-          WORKFLOW_NAME: ${{ inputs.source_workflow_name }}
+        env: { WORKFLOW_NAME: "${{ inputs.source_workflow_name }}" }
         run: |
-          set -Eeuo pipefail
-          lower="$(tr '[:upper:]' '[:lower:]' <<<"$WORKFLOW_NAME")"
-          side_effectful=false
-          if [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* || "$lower" == *store*package* ]]; then
-            side_effectful=true
-          fi
-          transient=false
-          if grep -Eiq 'ECONNRESET|ETIMEDOUT|ENOTFOUND|temporary failure|connection reset|connection timed out|runner.*lost|service unavailable|HTTP (502|503|504)|TLS handshake timeout' .actions-recovery/source.log; then
-            transient=true
-          fi
-          echo "side_effectful=$side_effectful" >> "$GITHUB_OUTPUT"
-          echo "transient=$transient" >> "$GITHUB_OUTPUT"
-
-      - name: Submit deterministic repair PR
+          set -Eeuo pipefail; lower="$(tr '[:upper:]' '[:lower:]' <<<"$WORKFLOW_NAME")"; side_effectful=false; [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* ]] && side_effectful=true
+          transient=false; grep -Eiq 'ECONNRESET|ETIMEDOUT|ENOTFOUND|temporary failure|connection reset|connection timed out|runner.*lost|service unavailable|HTTP (502|503|504)|TLS handshake timeout' .actions-recovery/source.log && transient=true || true
+          deterministic=false; grep -Eiq 'AssertionError|FAILED .*::|pytest.*failed|tests? failed|SyntaxError|compile.*failed|lint.*failed' .actions-recovery/source.log && deterministic=true || true
+          echo "side_effectful=$side_effectful" >> "$GITHUB_OUTPUT"; echo "transient=$transient" >> "$GITHUB_OUTPUT"; echo "deterministic=$deterministic" >> "$GITHUB_OUTPUT"
+      - name: Submit repair PR
         if: steps.repair.outputs.repaired == 'true'
         id: submit
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          SOURCE_BRANCH: ${{ inputs.source_branch }}
-          DEFAULT_BRANCH: ${{ steps.evidence.outputs.default_branch }}
+        env: { GH_TOKEN: "${{ github.token }}", SOURCE_RUN_ID: "${{ inputs.source_run_id }}", SOURCE_BRANCH: "${{ inputs.source_branch }}", DEFAULT_BRANCH: "${{ steps.evidence.outputs.default_branch }}" }
         run: |
-          set -Eeuo pipefail
-          repair_branch="actions-recovery/run-${SOURCE_RUN_ID}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git switch -C "$repair_branch"
-          git add -A
-          git reset -- .actions-recovery 2>/dev/null || true
-          if git diff --cached --quiet; then
-            echo "repair_ref=$SOURCE_BRANCH" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git commit -m "ci(recovery): repair Actions run ${SOURCE_RUN_ID}"
-          git push --force origin "HEAD:${repair_branch}"
-          base="$SOURCE_BRANCH"
-          [[ -z "$base" ]] && base="$DEFAULT_BRANCH"
-          pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$repair_branch" --state open --json url --jq '.[0].url // ""')"
-          if [[ -z "$pr" ]]; then
-            pr="$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$base" --head "$repair_branch" --title "ci(recovery): repair abnormal Actions run ${SOURCE_RUN_ID}" --body "GitHub Agent deterministic recovery for source run https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}")"
-          fi
-          echo "repair_ref=$repair_branch" >> "$GITHUB_OUTPUT"
-          echo "repair_pr=$pr" >> "$GITHUB_OUTPUT"
-
+          set -Eeuo pipefail; repair_branch="actions-recovery/run-${SOURCE_RUN_ID}"; git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"; git switch -C "$repair_branch"; git add -A; git reset -- .actions-recovery 2>/dev/null || true
+          if git diff --cached --quiet; then echo "repair_ref=$SOURCE_BRANCH" >> "$GITHUB_OUTPUT"; exit 0; fi
+          git commit -m "ci(recovery): repair Actions run ${SOURCE_RUN_ID}"; git push --force origin "HEAD:${repair_branch}"; base="$SOURCE_BRANCH"; [[ -z "$base" ]] && base="$DEFAULT_BRANCH"
+          pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$repair_branch" --state open --json url --jq '.[0].url // ""')"; [[ -z "$pr" ]] && pr="$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$base" --head "$repair_branch" --title "ci(recovery): repair abnormal Actions run ${SOURCE_RUN_ID}" --body "GitHub Agent v4 recovery for source run https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}")"
+          echo "repair_ref=$repair_branch" >> "$GITHUB_OUTPUT"; echo "repair_pr=$pr" >> "$GITHUB_OUTPUT"
       - name: Dispatch repaired workflow
         if: steps.repair.outputs.repaired == 'true' && steps.classify.outputs.side_effectful != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WORKFLOW_ID: ${{ inputs.source_workflow_id }}
-          REPAIR_REF: ${{ steps.submit.outputs.repair_ref }}
-        run: |
-          set -Eeuo pipefail
-          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches" -f ref="$REPAIR_REF"
-
-      - name: Retry clearly transient infrastructure failure once
-        if: steps.repair.outputs.repaired != 'true' && steps.classify.outputs.side_effectful != 'true' && steps.classify.outputs.transient == 'true'
+        env: { GH_TOKEN: "${{ github.token }}", WORKFLOW_ID: "${{ inputs.source_workflow_id }}", REPAIR_REF: "${{ steps.submit.outputs.repair_ref }}" }
+        run: gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches" -f ref="$REPAIR_REF"
+      - name: Retry transient failure once
+        if: steps.repair.outputs.repaired != 'true' && steps.classify.outputs.side_effectful != 'true' && steps.classify.outputs.transient == 'true' && steps.classify.outputs.deterministic != 'true'
         id: retry
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          RUN_ATTEMPT: ${{ steps.evidence.outputs.run_attempt }}
+        env: { GH_TOKEN: "${{ github.token }}", SOURCE_RUN_ID: "${{ inputs.source_run_id }}", RUN_ATTEMPT: "${{ steps.evidence.outputs.run_attempt }}" }
         run: |
-          set -Eeuo pipefail
-          if (( RUN_ATTEMPT >= 2 )); then
-            echo "retry_started=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/rerun" >/dev/null
-          echo "retry_started=true" >> "$GITHUB_OUTPUT"
-
-      - name: Build AI Repair Brief
+          if (( RUN_ATTEMPT >= 2 )); then echo "retry_started=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/rerun" >/dev/null; echo "retry_started=true" >> "$GITHUB_OUTPUT"
+      - name: Open AI Repair Brief when needed
         if: always() && (steps.repair.outputs.repaired != 'true' || steps.classify.outputs.side_effectful == 'true' || failure())
-        env:
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          SOURCE_WORKFLOW_NAME: ${{ inputs.source_workflow_name }}
-          SOURCE_BRANCH: ${{ inputs.source_branch }}
-          SOURCE_HEAD_SHA: ${{ inputs.source_head_sha }}
-          SOURCE_EVENT: ${{ inputs.source_event }}
-          RECOVERY_REASON: ${{ inputs.recovery_reason }}
-          WORKFLOW_PATH: ${{ steps.evidence.outputs.workflow_path }}
-          RUN_ATTEMPT: ${{ steps.evidence.outputs.run_attempt }}
-          REPAIRED: ${{ steps.repair.outputs.repaired }}
-          SIDE_EFFECTFUL: ${{ steps.classify.outputs.side_effectful }}
-          TRANSIENT: ${{ steps.classify.outputs.transient }}
-          REPAIR_PR: ${{ steps.submit.outputs.repair_pr }}
-          RETRY_STARTED: ${{ steps.retry.outputs.retry_started }}
+        env: { GH_TOKEN: "${{ github.token }}", SOURCE_RUN_ID: "${{ inputs.source_run_id }}", SOURCE_WORKFLOW_NAME: "${{ inputs.source_workflow_name }}", DETERMINISTIC: "${{ steps.classify.outputs.deterministic }}", TRANSIENT: "${{ steps.classify.outputs.transient }}", SIDE_EFFECTFUL: "${{ steps.classify.outputs.side_effectful }}" }
         run: |
-          set -Eeuo pipefail
-          failing_jobs="$(jq -r '.jobs[]? | select((.conclusion // "") != "success" and (.conclusion // "") != "skipped") | "- Job: **" + (.name // "unknown") + "** — `" + (.conclusion // "unknown") + "`" + (([.steps[]? | select((.conclusion // "") == "failure") | .name] | if length > 0 then " — failed step(s): " + join(", ") else "" end))' .actions-recovery/jobs.json 2>/dev/null || true)"
-          [[ -z "$failing_jobs" ]] && failing_jobs="- No failed job/step summary was exposed; inspect the source Run directly."
-          signals="$(grep -Ein 'error|failed|failure|traceback|assert|exception|timeout|timed out|fatal|hang|cancelled|canceled|ECONNRESET|ETIMEDOUT|ENOTFOUND|502|503|504' .actions-recovery/source.log 2>/dev/null | tail -n 40 | cut -c1-360 || true)"
-          [[ -z "$signals" ]] && signals="No high-signal lines extracted automatically."
-          {
-            echo "# GitHub Agent — AI Repair Brief"
-            echo
-            echo "No coding-agent provider is called automatically. This is the handoff package for the AI chosen by the user."
-            echo
-            echo "## Source"
-            echo "- Repository: \`$GITHUB_REPOSITORY\`"
-            echo "- Source Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID"
-            echo "- Workflow: **$SOURCE_WORKFLOW_NAME**"
-            echo "- Workflow file: \`${WORKFLOW_PATH:-unknown}\`"
-            echo "- Branch: \`${SOURCE_BRANCH:-unknown}\`"
-            echo "- Commit: https://github.com/$GITHUB_REPOSITORY/commit/$SOURCE_HEAD_SHA"
-            echo "- Event: \`${SOURCE_EVENT:-unknown}\`"
-            echo "- Run attempt: \`${RUN_ATTEMPT:-unknown}\`"
-            echo "- Recovery reason: **$RECOVERY_REASON**"
-            echo
-            echo "## Agent actions / classification"
-            echo "- Deterministic repair: **${REPAIRED:-false}**"
-            echo "- Repair PR: ${REPAIR_PR:-none}"
-            echo "- Side-effectful workflow: **${SIDE_EFFECTFUL:-unknown}**"
-            echo "- Transient infrastructure signature: **${TRANSIENT:-unknown}**"
-            echo "- Fresh rerun started: **${RETRY_STARTED:-false}**"
-            echo
-            echo "## Failed jobs / steps"
-            printf '%s\n' "$failing_jobs"
-            echo
-            echo "## High-signal log lines"
-            echo '```text'
-            printf '%s\n' "$signals"
-            echo '```'
-            echo
-            echo "## Task for the AI"
-            echo "1. Read this Issue, the full source Run, source Commit and relevant code."
-            echo "2. Check whether the source Commit is obsolete before changing it."
-            echo "3. Identify the root cause; do not only make tests green."
-            echo "4. Work on a dedicated repair branch; do not write directly to main."
-            echo "5. Run the original failing test/job, related regressions and GitHub Agent Policy Check."
-            echo "6. Open/update a PR with root cause, changes, verification and remaining risk."
-            echo "7. Never blindly replay Release / Deploy / Publish / Store Package side effects."
-            echo
-            echo "## Acceptance criteria"
-            echo "- Original failure/hang is addressed."
-            echo "- Relevant CI no longer hangs indefinitely."
-            echo "- Workflow guards remain compliant."
-            echo "- No unrelated behavior is weakened merely to make CI green."
-            echo "- Repair remains auditable through branch + commit + PR + CI."
-          } > .actions-recovery/ai-repair-brief.md
-
-      - name: Open or update AI Repair Issue
-        if: always() && (steps.repair.outputs.repaired != 'true' || steps.classify.outputs.side_effectful == 'true' || failure())
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          SOURCE_WORKFLOW_NAME: ${{ inputs.source_workflow_name }}
-        run: |
-          set -Eeuo pipefail
-          title="[GitHub Agent][AI Repair] ${SOURCE_WORKFLOW_NAME} run ${SOURCE_RUN_ID}"
-          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // ""')"
-          if [[ -n "$existing" ]]; then
-            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file .actions-recovery/ai-repair-brief.md
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file .actions-recovery/ai-repair-brief.md
-          fi
+          set -Eeuo pipefail; title="[GitHub Agent][AI Repair] ${SOURCE_WORKFLOW_NAME} run ${SOURCE_RUN_ID}"
+          body="Source run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}\n\nClassification: deterministic=${DETERMINISTIC}, transient=${TRANSIENT}, side_effectful=${SIDE_EFFECTFUL}. Read the full Run logs and source commit, fix the root cause on a dedicated branch, run the original failure plus regressions and Policy Check. Do not blindly replay Release/Deploy/Publish."
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // ""')"; if [[ -n "$existing" ]]; then gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"; else gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"; fi
