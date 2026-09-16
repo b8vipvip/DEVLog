@@ -2,79 +2,40 @@
 
 审计对象：`b8vipvip/chat2api`、`b8vipvip/GPTWork`、`b8vipvip/fdex`、`b8vipvip/qnbot`。
 
-状态：**整改实施中**。GitHub Agent v4 标准已在本 PR 中实现第一阶段：Governor force-cancel ghost run、PR-aware concurrency、失败分类、Fast/Full CI 模板、Node24-native action baseline。下一阶段按 `GPTWork -> qnbot -> chat2api -> fdex` 落地到项目仓库。
+状态：**整改实施中**。GitHub Agent v4 标准已完成第一阶段：Governor force-cancel ghost run、PR-aware concurrency、失败分类、Fast/Full CI 模板、Node24-native action baseline。项目落地顺序为 `GPTWork -> qnbot -> chat2api -> fdex`。
 
-## 总结
+## 审计结论
 
-四个仓库当前的 Actions 问题不是单一原因，而是三类问题叠加：
+近期红灯由三类问题叠加：确定性代码/测试失败、Workflow 拓扑放大、GitHub 平台 ghost run 残留。v4 因此不再采用“失败就 rerun”的简单策略。
 
-1. **确定性代码/测试失败**：近期代表性红灯多数属于断言、契约或测试与新代码语义不同步；这类问题重跑没有意义。
-2. **Workflow 结构放大**：同一个提交同时触发多个重型 workflow、PR 阶段提前做完整打包、重复执行同一套静态测试、缺少 path filter / fast gate / concurrency，使一次代码错误表现成多条红灯并消耗更多 Runner。
-3. **GitHub 平台异常残留**：GPTWork 存在长期 `queued` 且无 job 的幽灵 run；Actions Governor v3 已反复尝试普通 cancel，但 GitHub API 拒绝取消。最早一批 run 创建于 2026-09-13 09:20 UTC，时间与 GitHub 官方同日 Actions degraded performance 事故窗口高度重合。
+### chat2api
 
-因此，v4 同时解决 **代码失败分类、Workflow 拓扑、平台幽灵 run**，不再采用“失败就 rerun”的简单策略。
+基础治理较完整。主要问题已经转为架构迁移时 contract tests 未同步、production smoke 硬编码契约、release workflow 占 Runner 轮询前置检查，以及历史 queued ghost run。
 
-## 1. chat2api
+### GPTWork
 
-- CI 已有 PR 级 concurrency、timeout、pytest timeout，基础治理较完整。
-- 最新代表性失败是确定性测试失败：Runner、checkout、Python/Node setup、依赖安装、语法检查均成功，pytest 最后因 response terminal owner / preflight / recovery contract 与旧回归测试不同步而失败。
-- `production-image-smoke.yml` 含大量硬编码版本/字符串契约，架构迁移时必须与代码同提交更新。
-- `release.yml` 通过轮询等待 CI / smoke，后续应改事件式 gate，减少等待 Runner。
-- 仍存在历史 queued run，Governor v4 用 normal cancel -> recheck -> force-cancel 处理。
+优先级最高。存在多批长期 queued 且无 job 的 ghost run，v3 Governor 普通 cancel 无法清理；Store Package 在 PR 阶段过早启动完整 Windows/Linux 打包，并被 v3 错当成 release 类副作用 workflow；多个辅助 workflow 缺 timeout/concurrency。
 
-## 2. GPTWork
+### fdex
 
-### 关键问题
+代表性失败为 FastAPI/UI contract 与新实现不同步。feature/fix/agent push + pull_request 可能产生双触发；FastAPI 与 Android build 缺 path-aware gate；发布职责需要收敛。
 
-- GitHub API 当前可见多批长期 `queued`、无 job 的 ghost run。
-- v3 Governor 扫描这些 active run 后，普通 cancel 被 GitHub 拒绝，导致长期残留。
-- `Store Package` 在 PR 上过早启动 Windows + Linux 完整打包。
-- v3 按名称把 Store Package 误判为 release 类副作用 workflow；v4 已移除该误判。
-- `Private Core Boundary`、`license-server`、housekeeping/cleanup 等存在缺 timeout/concurrency 的情况。
+### qnbot
 
-### v4 对策
+同一提交会在 API CI 与 Windows build 中重复执行 repository static tests，一个 assertion failure 被放大成多条红灯。API-only 改动也可能启动完整 Windows 构建；多个 workflow 缺 concurrency/timeout；旧 action major 需要迁移 Node24-native 版本。
 
-- queued + no jobs + 超过阈值 => `GHOST_RUN`。
-- normal cancel 后重新读取状态，仍 active => `/force-cancel`。
-- ghost run 清理后不进入代码 Recovery。
-- Store Package 改为普通 artifact build，PR 可被新 SHA 取代；并延后到 Fast/CI gate 成功后执行。
+## GitHub Agent v4 标准
 
-## 3. fdex
+- `DETERMINISTIC_TEST`：pytest/assertion/compile/lint，禁止自动 rerun。
+- `WORKFLOW_CONFIG`：修 workflow 后以新 commit 验证。
+- `INFRA_TRANSIENT`：Runner/网络/GitHub 5xx，最多一次受限 rerun。
+- `GHOST_RUN`：长期 active、无 job 或 normal cancel 无效，进入 force-cancel。
+- `SUPERSEDED`：旧 PR/feature SHA 被新 SHA 取代，直接取消。
+- `SIDE_EFFECTFUL`：Release/Deploy/Publish，串行且禁止盲目 replay。
 
-- 代表性失败为 FastAPI pytest 的 UI/CSS contract 与新实现不同步，Android job 本身成功。
-- feature/fix/agent 分支 push + pull_request 可能让同一提交重复触发 CI。
-- FastAPI 与 Android build 缺 path-aware gate。
-- `release.yml` 与 `auto-tag-release.yml` 发布职责需要收敛成单一 Release authority。
+Governor v4：`normal cancel -> recheck -> force-cancel`；jobless ghost 不进入代码 Recovery。默认分支已经 in-progress 的正式验证不会因 duplicate 规则被强杀，PR/feature branch 的旧 SHA 可以淘汰。
 
-## 4. qnbot
-
-- PR #277 的同一提交同时触发 API control plane CI 与 Windows x64 release build，两个 workflow 重复运行 repository static tests，并因同一个旧 UI contract assertion 一起失败。
-- 这类结构会把一个代码错误放大成多条红灯。
-- API-only 改动仍可能启动完整 Windows/MSBuild/package，缺 path-aware gate。
-- 多个 workflow 缺 concurrency/timeout。
-- 旧 action major 需要迁移到 Node24-native 版本。
-
-## GitHub Agent v4 已实现的标准
-
-### A. 失败分类
-
-- `DETERMINISTIC_TEST`：pytest / assertion / compile / lint；禁止自动 rerun。
-- `WORKFLOW_CONFIG`：YAML / action / permission；修 workflow 后新 commit 验证。
-- `INFRA_TRANSIENT`：Runner lost、DNS、连接重置、502/503/504；最多一次 fresh rerun。
-- `GHOST_RUN`：长期 queued/in_progress、无 job 或 normal cancel 无效；force-cancel。
-- `SUPERSEDED`：被新 SHA 取代；直接 cancel。
-- `SIDE_EFFECTFUL`：Release / Deploy / Publish；串行且禁止盲目 replay。
-
-### B. Governor v4
-
-- normal cancel -> recheck -> force-cancel。
-- queued 且无 job 的 stale run 视为 `GHOST_RUN`，不进入 Recovery。
-- 默认分支已经 in-progress 的正式验证不会因 duplicate 规则被强杀。
-- PR/feature branch 的旧 SHA 可积极淘汰。
-
-### C. Concurrency v4
-
-推荐普通 CI：
+普通 CI 推荐：
 
 ```yaml
 concurrency:
@@ -82,39 +43,15 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 ```
 
-Release / Deploy / Publish：串行，`cancel-in-progress: false`。
+CI 默认拓扑：Fast Gate（syntax/lint/compile/focused contracts）成功后，再运行 Full Gate（pytest/Docker/Android/Windows/package）。重型任务按改动路径选择执行。
 
-### D. Fast Gate -> Full Gate
+每个仓库只有一个最终 Release/Deploy/Publish authority。artifact/package build 不等于发布。
 
-1. Fast Gate：syntax / lint / compile / contract / changed-scope tests。
-2. Full Gate：完整 pytest / Docker / Windows build / installers / package。
+Node24-native baseline：`actions/checkout@v7`、`setup-python@v7`、`setup-node@v7`、`setup-java@v6`、`upload-artifact@v7`、`download-artifact@v7`。
 
-Full Gate 只有 Fast Gate 成功后才运行。
+## 落地清单
 
-### E. Path-aware CI
-
-- Python/API 改动不启动无关 Android/Windows installer。
-- Android/desktop 改动不启动无关服务端 full suite。
-- 文档改动默认不启动完整构建。
-
-### F. 单一发布 authority
-
-一个仓库只能有一个 workflow 拥有创建/覆盖 tag、GitHub Release、production deploy 的最终权限。其他 workflow 只生产 artifact 或显式调用发布 workflow。
-
-### G. Node24-native Actions
-
-v4 模板基线：
-
-- `actions/checkout@v7`
-- `actions/setup-python@v7`
-- `actions/setup-node@v7`
-- `actions/setup-java@v6`
-- `actions/upload-artifact@v7`
-- `actions/download-artifact@v7`
-
-## 落地顺序
-
-1. **GPTWork**：Governor v4 + ghost cleanup + Store Package gate + timeout/concurrency。
+1. **GPTWork**：Governor v4、ghost cleanup、Store Package gate、timeout/concurrency。
 2. **qnbot**：Fast Gate、去重复 static tests、path gate、Node24 actions。
-3. **chat2api**：Governor v4、release event gate、contract migration guard。
+3. **chat2api**：Governor v4、release gate、contract migration guard。
 4. **fdex**：concurrency/timeout、去 push+PR 双触发、path gate、单一 release authority。
