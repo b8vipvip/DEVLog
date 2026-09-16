@@ -8,6 +8,7 @@ from pathlib import Path
 
 PROTECTED_WORDS = ("release", "deploy", "publish")
 DEBUG_WORDS = ("debug", "diagnostic", "one-shot", "oneshot", "tmp-")
+INTERNAL_FILES = {"actions-governor.yml", "actions-recovery.yml"}
 
 
 def block(text: str, key: str) -> str | None:
@@ -32,6 +33,7 @@ def validate(path: Path) -> list[str]:
     hay = f"{name} {path.name}".lower()
     protected = any(word in hay for word in PROTECTED_WORDS)
     debug = any(word in hay for word in DEBUG_WORDS)
+    internal = path.name in INTERNAL_FILES
     errors: list[str] = []
 
     on = block(text, "on")
@@ -55,10 +57,15 @@ def validate(path: Path) -> list[str]:
             errors.append("concurrency is missing cancel-in-progress")
         else:
             cancel_value = cancel_match.group(1).strip()
+            has_pr = on is not None and "\n  pull_request:" in on
+            has_push = on is not None and "\n  push:" in on
             if protected and cancel_value != "false":
                 errors.append("release/deploy/publish workflow must use cancel-in-progress: false")
-            elif not protected and cancel_value == "false":
-                errors.append("ordinary workflow must cancel superseded work; use true or a PR-aware expression")
+            elif not protected and not internal and has_pr and has_push:
+                if cancel_value in {"true", "false"} or "github.event_name" not in cancel_value or "pull_request" not in cancel_value:
+                    errors.append("workflow with push + pull_request must cancel PR superseded work only; use a PR-aware expression")
+            elif not protected and not internal and cancel_value == "false":
+                errors.append("ordinary non-PR workflow should allow superseded work to be cancelled")
 
     lines = text.splitlines(keepends=True)
     jobs_start = next((i for i, line in enumerate(lines) if re.match(r"^jobs:\s*(?:#.*)?$", line.rstrip("\n"))), None)

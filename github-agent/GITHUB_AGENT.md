@@ -22,6 +22,8 @@ GitHub Agent v4 是面向高频开发仓库的 GitHub Actions 治理标准。
 
 普通 cancel 后重新读取状态；仍 queued/in_progress 才调用 force-cancel。queued 且无 job 的 run 不触发 Recovery。force-cancel 仍被 GitHub 拒绝时标记平台 ghost，并限制每轮尝试数量。PR/feature branch 旧 SHA 可以淘汰，默认分支已经 in-progress 的普通验证不因 duplicate 规则被强杀。
 
+Governor 是兜底治理，不应该自己制造大量 Actions。标准模板使用每小时一次、错开整点的 `17 * * * *`；不要默认使用 `*/10 * * * *`。后者每个仓库每天会额外创建 144 次 Governor run，而 hourly 只创建 24 次。高频提交的热路径去重交给 workflow 自身的 concurrency，Governor 主要负责 stale/ghost cleanup。
+
 ## Recovery
 
 `actions_strategy_autofix.py` 只修机械可判断的 workflow 缺陷；项目可提供 `.github/actions-recovery.sh` 执行已知、幂等的确定性修复；无法机械修复时创建 `[GitHub Agent][AI Repair] <workflow> run <run_id>`。只有明显的瞬时基础设施故障且没有确定性失败信号时才允许一次 fresh rerun。Release/Deploy/Publish 不盲目 replay。
@@ -47,6 +49,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 ```
+
+同时监听 `push` 和 `pull_request` 的普通 workflow 不允许继续使用字面量 `cancel-in-progress: true`：那会让默认分支正在执行的正式验证被后续 push 中断。也不应使用字面量 `false`：那会让同一 PR 的旧 SHA 持续浪费 Runner。Policy Check/Autofix 应把这类旧配置迁移为 PR-aware expression。
 
 Release/Deploy/Publish 使用串行 group 和 `cancel-in-progress: false`。
 
