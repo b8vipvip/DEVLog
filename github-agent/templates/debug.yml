@@ -17,6 +17,4 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Diagnostic command
-        run: |
-          echo 'Replace with a bounded diagnostic command.'
-          echo 'Do not add push, pull_request, or schedule triggers to this workflow.'
+        run: echo 'Replace with one bounded diagnostic command; never add automatic triggers.'
