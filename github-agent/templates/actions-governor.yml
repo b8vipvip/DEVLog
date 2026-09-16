@@ -141,8 +141,6 @@ jobs:
             fi
           }
 
-          # Duplicate policy: aggressively replace PR/feature-branch work, but do
-          # not kill an already-running validation on the default branch.
           while IFS=$'\x1f' read -r created id workflow_id name branch head_sha event status started workflow_path run_attempt; do
             [[ -z "$id" || "$id" == "$current_run" ]] && continue
             internal_strategy_workflow "$name" && continue
@@ -157,8 +155,6 @@ jobs:
             fi
           done < "$runs_file"
 
-          # Stale/ghost policy. A queued run with no jobs is infrastructure state,
-          # not a code failure, so clean it without dispatching Recovery.
           while IFS=$'\x1f' read -r created id workflow_id name branch head_sha event status started workflow_path run_attempt; do
             [[ -z "$id" || "$id" == "$current_run" ]] && continue
             [[ -n "${resolved[$id]:-}" ]] && continue
