@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.source_head_sha }}
           fetch-depth: 0
@@ -97,15 +97,20 @@ jobs:
           set -Eeuo pipefail
           lower="$(tr '[:upper:]' '[:lower:]' <<<"$WORKFLOW_NAME")"
           side_effectful=false
-          if [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* || "$lower" == *store*package* ]]; then
+          if [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* ]]; then
             side_effectful=true
           fi
           transient=false
           if grep -Eiq 'ECONNRESET|ETIMEDOUT|ENOTFOUND|temporary failure|connection reset|connection timed out|runner.*lost|service unavailable|HTTP (502|503|504)|TLS handshake timeout' .actions-recovery/source.log; then
             transient=true
           fi
+          deterministic=false
+          if grep -Eiq 'AssertionError|FAILED .*::|pytest.*failed|tests? failed|SyntaxError|compile.*failed|lint.*failed' .actions-recovery/source.log; then
+            deterministic=true
+          fi
           echo "side_effectful=$side_effectful" >> "$GITHUB_OUTPUT"
           echo "transient=$transient" >> "$GITHUB_OUTPUT"
+          echo "deterministic=$deterministic" >> "$GITHUB_OUTPUT"
 
       - name: Submit deterministic repair PR
         if: steps.repair.outputs.repaired == 'true'
@@ -149,7 +154,7 @@ jobs:
           gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches" -f ref="$REPAIR_REF"
 
       - name: Retry clearly transient infrastructure failure once
-        if: steps.repair.outputs.repaired != 'true' && steps.classify.outputs.side_effectful != 'true' && steps.classify.outputs.transient == 'true'
+        if: steps.repair.outputs.repaired != 'true' && steps.classify.outputs.side_effectful != 'true' && steps.classify.outputs.transient == 'true' && steps.classify.outputs.deterministic != 'true'
         id: retry
         env:
           GH_TOKEN: ${{ github.token }}
@@ -178,6 +183,7 @@ jobs:
           REPAIRED: ${{ steps.repair.outputs.repaired }}
           SIDE_EFFECTFUL: ${{ steps.classify.outputs.side_effectful }}
           TRANSIENT: ${{ steps.classify.outputs.transient }}
+          DETERMINISTIC: ${{ steps.classify.outputs.deterministic }}
           REPAIR_PR: ${{ steps.submit.outputs.repair_pr }}
           RETRY_STARTED: ${{ steps.retry.outputs.retry_started }}
         run: |
@@ -187,7 +193,7 @@ jobs:
           signals="$(grep -Ein 'error|failed|failure|traceback|assert|exception|timeout|timed out|fatal|hang|cancelled|canceled|ECONNRESET|ETIMEDOUT|ENOTFOUND|502|503|504' .actions-recovery/source.log 2>/dev/null | tail -n 40 | cut -c1-360 || true)"
           [[ -z "$signals" ]] && signals="No high-signal lines extracted automatically."
           {
-            echo "# GitHub Agent — AI Repair Brief"
+            echo "# GitHub Agent v4 — AI Repair Brief"
             echo
             echo "No coding-agent provider is called automatically. This is the handoff package for the AI chosen by the user."
             echo
@@ -204,6 +210,7 @@ jobs:
             echo
             echo "## Agent actions / classification"
             echo "- Deterministic repair: **${REPAIRED:-false}**"
+            echo "- Deterministic failure signature: **${DETERMINISTIC:-unknown}**"
             echo "- Repair PR: ${REPAIR_PR:-none}"
             echo "- Side-effectful workflow: **${SIDE_EFFECTFUL:-unknown}**"
             echo "- Transient infrastructure signature: **${TRANSIENT:-unknown}**"
@@ -224,7 +231,7 @@ jobs:
             echo "4. Work on a dedicated repair branch; do not write directly to main."
             echo "5. Run the original failing test/job, related regressions and GitHub Agent Policy Check."
             echo "6. Open/update a PR with root cause, changes, verification and remaining risk."
-            echo "7. Never blindly replay Release / Deploy / Publish / Store Package side effects."
+            echo "7. Never blindly replay Release / Deploy / Publish side effects."
             echo
             echo "## Acceptance criteria"
             echo "- Original failure/hang is addressed."
