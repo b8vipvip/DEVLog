@@ -91,9 +91,10 @@ on:
 2. 后续验证完成会再次触发 Release；只有同一 SHA 的全部必需验证都 `completed + success` 时才取得发布权。
 3. Release 使用固定串行 concurrency group + `cancel-in-progress: false`，并在创建 Release 前检查目标版本是否已存在，因此多个 completion 事件不会重复发布。
 4. 查询必须绑定精确 `head_sha`，并只接受默认分支的正式 `push` 验证；不要把 PR 验证或其它 SHA 的成功结果拼进发布条件。
-5. `workflow_dispatch` 可以保留，但手工指定的 source SHA 也必须通过同一组正式验证，不得绕过 Release Gate。
+5. 同一 SHA 如果存在 rerun/多次正式验证，不能依赖 GitHub API 数组的隐式顺序或直接取 `[0]`；必须按 `run_attempt` / `created_at` / `id` 等明确规则选出最新有效 run，再读取其状态。
+6. `workflow_dispatch` 可以保留，但手工指定的 source SHA 必须仍属于当前默认分支 ancestry，并通过同一组正式验证；已经脱离当前 main/master 历史的旧 SHA 不得取得发布权。
 
-这种模式把“最多等待 N 分钟”的 Runner polling 改成几个秒级事件处理：peer 未完成时立即 no-op，最终 peer 完成时执行真实 Release。chat2api 已在真实 main 合并链路验证该模式：第一次 Release 在 peer pending 时快速退出，第二次在 `CI` 与 `Production image smoke` 均成功后取得发布权。
+这种模式把“最多等待 N 分钟”的 Runner polling 改成几个秒级事件处理：peer 未完成时立即 no-op，最终 peer 完成时执行真实 Release。chat2api 已在真实 main 合并链路验证该模式：第一次 Release 在 peer pending 时快速退出，第二次在 `CI` 与 `Production image smoke` 均成功后取得发布权。后续加固又明确了 latest-run selection 与 source ancestry 两条规则，避免 API 返回顺序和历史 SHA 手工发布造成不确定性。
 
 ## Node24 baseline
 
