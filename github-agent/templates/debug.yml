@@ -1,4 +1,4 @@
-name: Manual Debug
+name: Debug - One Shot
 
 on:
   workflow_dispatch:
@@ -7,16 +7,16 @@ permissions:
   contents: read
 
 concurrency:
-  group: manual-debug-${{ github.ref }}
+  group: debug-one-shot-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   debug:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - name: Diagnostic commands
+      - uses: actions/checkout@v7
+      - name: Diagnostic command
         run: |
-          echo 'Put temporary diagnostics here.'
-          echo 'Do not convert this workflow to permanent push/pull_request triggering.'
+          echo 'Replace with a bounded diagnostic command.'
+          echo 'Do not add push, pull_request, or schedule triggers to this workflow.'
