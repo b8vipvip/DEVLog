@@ -72,6 +72,18 @@ on:
 
 最终 Release authority 应直接上传稳定版本所需的全部标准资产。不要为了给同一个 Release 再挂一个固定 rescue/manifest/helper 资产，就在 Publish 完成后链式启动第二条 workflow；这会让 skipped/no-op publish 也产生连锁 run。独立资产 workflow 更适合“该资产自身发生变化时，回写当前最新稳定版本”的场景。
 
+### 多工作流 Release Gate：事件驱动，不占 Runner 轮询
+
+当 Release 必须同时等待多个默认分支验证（例如 `CI` + `Production image smoke`）时，不允许先启动 Release job，再用 `sleep` / API polling 占住 Runner 等其它 workflow 完成。标准做法是让 Release 同时监听这些验证的 `workflow_run: completed` 事件，并对触发 SHA 做一次快照检查：
+
+1. 第一个验证完成时，如果同 SHA 的其它必需验证尚未完成，Release 快速成功退出，不 checkout、不发布、不等待。
+2. 后续验证完成会再次触发 Release；只有同一 SHA 的全部必需验证都 `completed + success` 时才取得发布权。
+3. Release 使用固定串行 concurrency group + `cancel-in-progress: false`，并在创建 Release 前检查目标版本是否已存在，因此多个 completion 事件不会重复发布。
+4. 查询必须绑定精确 `head_sha`，并只接受默认分支的正式 `push` 验证；不要把 PR 验证或其它 SHA 的成功结果拼进发布条件。
+5. `workflow_dispatch` 可以保留，但手工指定的 source SHA 也必须通过同一组正式验证，不得绕过 Release Gate。
+
+这种模式把“最多等待 N 分钟”的 Runner polling 改成几个秒级事件处理：peer 未完成时立即 no-op，最终 peer 完成时执行真实 Release。chat2api 已在真实 main 合并链路验证该模式：第一次 Release 在 peer pending 时快速退出，第二次在 `CI` 与 `Production image smoke` 均成功后取得发布权。
+
 ## Node24 baseline
 
 基础 Actions：`actions/checkout@v7`、`actions/setup-python@v7`、`actions/setup-node@v7`、`actions/setup-java@v6`、`actions/upload-artifact@v7`、`actions/download-artifact@v7`。
