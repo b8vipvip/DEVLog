@@ -2,24 +2,13 @@ name: Actions Policy Check
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/**'
-      - '.github/scripts/**'
-      - '.github/ACTIONS_STRATEGY.md'
-      - '.github/GITHUB_AGENT.md'
+    paths: ['.github/workflows/**', '.github/scripts/**', '.github/ACTIONS_STRATEGY.md', '.github/GITHUB_AGENT.md']
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/**'
-      - '.github/scripts/**'
-      - '.github/ACTIONS_STRATEGY.md'
-      - '.github/GITHUB_AGENT.md'
+    paths: ['.github/workflows/**', '.github/scripts/**', '.github/ACTIONS_STRATEGY.md', '.github/GITHUB_AGENT.md']
   workflow_dispatch:
     inputs:
-      ref:
-        description: Optional ref to validate
-        required: false
-        type: string
+      ref: { description: Optional ref to validate, required: false, type: string }
 
 permissions:
   contents: read
