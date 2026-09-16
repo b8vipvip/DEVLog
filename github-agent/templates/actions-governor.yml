@@ -24,15 +24,16 @@ concurrency:
 
 jobs:
   enforce:
-    name: Govern duplicate, stale, and historical runs
+    name: Govern duplicate, stale, and ghost runs
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       DEFAULT_MAX_MINUTES: '45'
       PROTECTED_MAX_MINUTES: '180'
       INTERNAL_MAX_MINUTES: '20'
+      GHOST_QUEUED_MINUTES: '15'
     steps:
-      - name: Enforce GitHub Actions Strategy v3
+      - name: Enforce GitHub Agent v4 runtime policy
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -40,6 +41,7 @@ jobs:
           set -Eeuo pipefail
           repo="$GITHUB_REPOSITORY"
           current_run="$GITHUB_RUN_ID"
+          default_branch="$(gh api "repos/${repo}" --jq '.default_branch')"
           now_epoch="$(date -u +%s)"
           runs_file="$(mktemp)"
           trap 'rm -f "$runs_file"' EXIT
@@ -65,41 +67,64 @@ jobs:
           } | LC_ALL=C sort -r > "$runs_file"
 
           scanned_count="$(wc -l < "$runs_file" | tr -d ' ')"
-          cancelled_count=0
+          resolved_count=0
+          force_cancelled_count=0
+          ghost_count=0
           recovery_count=0
           declare -A seen=()
-          declare -A cancelled=()
+          declare -A resolved=()
 
           lower_name() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
           protected_serial_workflow() {
             local lower
             lower="$(lower_name "$1")"
-            [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* || "$lower" == *store*package* ]]
+            [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* ]]
           }
           internal_strategy_workflow() {
             local lower
             lower="$(lower_name "$1")"
             [[ "$lower" == "actions governor" || "$lower" == "actions recovery" || "$lower" == "actions policy check" ]]
           }
+          run_status() {
+            gh api "repos/${repo}/actions/runs/$1" --jq '.status' 2>/dev/null || echo unknown
+          }
+          jobs_count() {
+            gh api "repos/${repo}/actions/runs/$1/jobs?filter=latest&per_page=1" --jq '.total_count // 0' 2>/dev/null || echo 0
+          }
 
           cancel_run() {
             local id="$1" reason="$2" name="$3"
-            [[ -n "${cancelled[$id]:-}" ]] && return 0
+            [[ -n "${resolved[$id]:-}" ]] && return 0
+
             if gh api --method POST "repos/${repo}/actions/runs/${id}/cancel" >/dev/null 2>&1; then
-              cancelled[$id]=1
-              cancelled_count=$((cancelled_count + 1))
-              echo "::notice::Cancelled run ${id} (${name}): ${reason}"
-              return 0
+              echo "::notice::Requested normal cancellation for run ${id} (${name}): ${reason}"
+            else
+              echo "::warning::Normal cancellation was rejected for run ${id} (${name}); checking for ghost state."
             fi
-            echo "::warning::Run ${id} (${name}) could not be cancelled; it may already have completed."
-            return 1
+
+            sleep 2
+            local status_now
+            status_now="$(run_status "$id")"
+            if [[ "$status_now" == "queued" || "$status_now" == "in_progress" ]]; then
+              if gh api --method POST "repos/${repo}/actions/runs/${id}/force-cancel" >/dev/null 2>&1; then
+                force_cancelled_count=$((force_cancelled_count + 1))
+                echo "::notice::Force-cancelled run ${id} (${name}): ${reason}"
+              else
+                echo "::warning::Force-cancel failed for still-active run ${id} (${name}); leaving it for the next Governor pass."
+                return 1
+              fi
+            fi
+
+            resolved[$id]=1
+            resolved_count=$((resolved_count + 1))
+            return 0
           }
 
           dispatch_recovery() {
             local id="$1" workflow_id="$2" name="$3" branch="$4" head_sha="$5" event="$6" workflow_path="$7" run_attempt="$8" reason="$9"
             internal_strategy_workflow "$name" && return 0
             if gh workflow run actions-recovery.yml \
-              --repo "$repo" --ref main \
+              --repo "$repo" --ref "$default_branch" \
               -f source_run_id="$id" \
               -f source_workflow_id="$workflow_id" \
               -f source_workflow_name="$name" \
@@ -116,23 +141,37 @@ jobs:
             fi
           }
 
+          # Duplicate policy: aggressively replace PR/feature-branch work, but do
+          # not kill an already-running validation on the default branch.
           while IFS=$'\x1f' read -r created id workflow_id name branch head_sha event status started workflow_path run_attempt; do
             [[ -z "$id" || "$id" == "$current_run" ]] && continue
             internal_strategy_workflow "$name" && continue
             protected_serial_workflow "$name" && continue
             key="${workflow_id}|${branch}|${event}"
             if [[ -n "${seen[$key]:-}" ]]; then
-              cancel_run "$id" "superseded duplicate; newer run ${seen[$key]} is active" "$name" || true
+              if [[ "$event" == "pull_request" || ( "$event" == "push" && "$branch" != "$default_branch" ) || "$status" == "queued" ]]; then
+                cancel_run "$id" "superseded duplicate; newer run ${seen[$key]} is active" "$name" || true
+              fi
             else
               seen[$key]="$id"
             fi
           done < "$runs_file"
 
+          # Stale/ghost policy. A queued run with no jobs is infrastructure state,
+          # not a code failure, so clean it without dispatching Recovery.
           while IFS=$'\x1f' read -r created id workflow_id name branch head_sha event status started workflow_path run_attempt; do
             [[ -z "$id" || "$id" == "$current_run" ]] && continue
-            [[ -n "${cancelled[$id]:-}" ]] && continue
+            [[ -n "${resolved[$id]:-}" ]] && continue
             started_epoch="$(date -u -d "$started" +%s)"
             age_minutes=$(( (now_epoch - started_epoch) / 60 ))
+            count="$(jobs_count "$id")"
+
+            if [[ "$status" == "queued" && "$count" == "0" && "$age_minutes" -ge "$GHOST_QUEUED_MINUTES" ]]; then
+              ghost_count=$((ghost_count + 1))
+              cancel_run "$id" "ghost queued run with no jobs aged ${age_minutes}m" "$name" || true
+              continue
+            fi
+
             max_minutes="$DEFAULT_MAX_MINUTES"
             if internal_strategy_workflow "$name"; then
               max_minutes="$INTERNAL_MAX_MINUTES"
@@ -142,9 +181,13 @@ jobs:
             if (( age_minutes >= max_minutes )); then
               reason="stale ${status} run aged ${age_minutes}m (limit ${max_minutes}m)"
               if cancel_run "$id" "$reason" "$name"; then
-                dispatch_recovery "$id" "$workflow_id" "$name" "$branch" "$head_sha" "$event" "$workflow_path" "$run_attempt" "$reason"
+                if [[ "$count" -gt 0 ]]; then
+                  dispatch_recovery "$id" "$workflow_id" "$name" "$branch" "$head_sha" "$event" "$workflow_path" "$run_attempt" "$reason"
+                else
+                  echo "::notice::Run ${id} had no jobs; classified as GHOST_RUN and Recovery was skipped."
+                fi
               fi
             fi
           done < "$runs_file"
 
-          echo "Actions Governor v3 complete. Active runs scanned: ${scanned_count}; cancelled: ${cancelled_count}; recovery dispatched: ${recovery_count}."
+          echo "GitHub Agent v4 Governor complete. Active scanned: ${scanned_count}; resolved: ${resolved_count}; force-cancelled: ${force_cancelled_count}; ghosts: ${ghost_count}; recovery dispatched: ${recovery_count}."
