@@ -1,22 +1,46 @@
-# GitHub Agent v3
+# GitHub Agent v4
 
-GitHub Agent v3 是原“GitHub Actions 策略 v3”的正式新名称。它以 GitHub Actions 作为执行底座，在仓库内提供 **预防、检查、运行时治理、历史异常恢复、确定性自动修复和 AI Repair Brief 交接**。
+GitHub Agent v4 是面向高频开发仓库的 GitHub Actions 治理标准。它以 GitHub Actions 作为执行底座，在仓库内提供 **预防、Fast Gate、运行时治理、ghost run 清理、失败分类、确定性自动修复和 AI Repair Brief 交接**。
 
-GitHub Agent **不接入、不调用 coding-agent provider**。当问题需要理解业务代码时，Agent 只负责把问题整理完整，由用户随后让自己选择的 AI 读取并修复。
+GitHub Agent **不接入、不调用 coding-agent provider**。当问题需要理解业务代码时，Agent 负责把证据整理完整，由用户选择的 AI 读取并修复。
 
-## 1. GitHub 原生提供什么
+## 1. v4 的核心原则
 
-GitHub Actions 原生能够读取 Workflow/Job 状态与日志、Cancel、Re-run、workflow_dispatch，并在权限允许时写分支、提交、PR、Issue。这些属于运行与控制能力，不等于理解代码并自动修复。
+- **代码失败不重跑**：pytest assertion、compile、lint、contract failure 必须由新 commit 修复。
+- **瞬时基础设施故障最多重跑一次**：Runner lost、DNS、connection reset、502/503/504 等才允许 fresh rerun。
+- **ghost run 不是代码失败**：长期 queued/in_progress 且没有 job，或普通 cancel 无效时，进入 force-cancel 清理链路，不生成代码 Recovery。
+- **PR 与默认分支采用不同并发策略**：PR 只保留最新 SHA；默认分支已经运行的正式验证允许完成。
+- **Fast Gate 先于 Full Gate**：语法、lint、compile、关键 contract 先通过，再启动完整 pytest、Docker、Windows installer、Android 等重任务。
+- **Path-aware CI**：只运行与本次改动范围有关的重任务。
+- **Single Release Authority**：每个仓库只有一个 workflow 拥有最终 Release/Deploy/Publish 权限；artifact build 不等同于发布。
 
-## 2. GitHub Agent 的修复分层
+## 2. 失败分类
+
+GitHub Agent v4 使用以下分类：
+
+- `DETERMINISTIC_TEST`：测试、断言、编译、lint、静态契约失败。禁止自动 rerun。
+- `WORKFLOW_CONFIG`：YAML、action、permissions、workflow 配置错误。修 workflow 后以新 commit 验证。
+- `INFRA_TRANSIENT`：Runner/网络/GitHub 5xx 等瞬时故障。最多一次受限 rerun。
+- `GHOST_RUN`：长期 active、无 job、普通 cancel 无效。normal cancel -> recheck -> force-cancel，不进入代码 Recovery。
+- `SUPERSEDED`：旧 PR/feature SHA 已被新 SHA 取代。直接取消。
+- `SIDE_EFFECTFUL`：Release/Deploy/Publish。串行执行，禁止盲目 replay。
+
+## 3. 修复分层
 
 ### L0：运行控制
 
-发现 duplicate / stale run 后先释放 Runner：Cancel、去重、超时保护。
+Governor 负责 duplicate、stale、ghost run：
+
+1. 普通 cancel；
+2. 重新读取 run 状态；
+3. 若仍 queued/in_progress，则调用 force-cancel；
+4. queued 且无 job 的 run 标记为 `GHOST_RUN`，不触发 Recovery。
 
 ### L1：确定性 Workflow 修复
 
-`actions_strategy_autofix.py` 负责可以机械判断的缺陷，例如缺少 `workflow_dispatch`、最小 `permissions`、`concurrency`、`cancel-in-progress`、发布串行保护和 Job `timeout-minutes`。
+`actions_strategy_autofix.py` 负责机械可判断的缺陷：`workflow_dispatch`、最小 `permissions`、`concurrency`、Job `timeout-minutes` 等。
+
+v4 不再把 `Store Package` / artifact build 按名称自动视为生产副作用 workflow；只有 Release / Deploy / Publish 属于默认 side-effectful 类别。
 
 ### L2：项目确定性代码修复
 
@@ -24,75 +48,78 @@ GitHub Actions 原生能够读取 Workflow/Job 状态与日志、Cancel、Re-run
 
 ### L3：AI Repair Brief
 
-如果问题需要业务理解、跨文件推理或新的代码修法，Agent 不猜、不调用外部 coding agent，而是创建：
+如果问题需要业务理解、跨文件推理或新的代码修法，Agent 创建：
 
 `[GitHub Agent][AI Repair] <workflow> run <run_id>`
 
-标准 Issue 至少包含：
+Issue 应包含 Source Run、workflow/path、branch/SHA/event/attempt、失败 jobs/steps、高信号日志、失败分类、是否有副作用、Agent 已采取的动作以及验收标准。
 
-- Source Run / Workflow / Workflow path；
-- branch / commit SHA / event / attempt；
-- Governor / Recovery reason；
-- failed jobs / steps；
-- 高信号错误行摘要；
-- 是否检测到瞬时基础设施故障；
-- 是否属于 Release / Deploy 等有副作用任务；
-- 自动修复 PR（如有）；
-- Agent 已执行的 Cancel / repair / rerun 动作；
-- 给接手 AI 的任务、约束和验收标准。
-
-用户随后让 AI 读取该 Issue、完整 Run 日志、对应 Commit 和仓库代码即可继续修复。
-
-详见 [`AI_REPAIR_HANDOFF.md`](./AI_REPAIR_HANDOFF.md)。
-
-## 3. 标准恢复链路
+## 4. 标准 CI 拓扑
 
 ```text
-失败 / 卡死 / 历史异常 run
-          ↓
-Governor 判定 duplicate / stale
-          ↓
-Cancel 释放 Runner
-          ↓
-Recovery 收集 metadata + jobs + logs
-          ↓
-L1 Workflow 确定性修复？
-   ├─ 是 → Recovery PR → 验证
-   └─ 否
-          ↓
-L2 项目已知规则可修？
-   ├─ 是 → 修改代码/测试 → Recovery PR → CI
-   └─ 否
-          ↓
-生成 AI Repair Brief Issue
-          ↓
-用户让 AI 读取 Issue / Run / 代码
-          ↓
-AI 创建修复分支 + PR + CI
+push / pull_request
+        ↓
+     Fast Gate
+ syntax / lint / compile
+ focused contract tests
+        ↓ success
+     Full Gate
+ pytest / Docker / Android
+ Windows build / package
+        ↓ success
+ release gate (仅需要时)
+        ↓
+ Release / Deploy / Publish
 ```
 
-## 4. 瞬时故障
+重型任务应通过 `needs:`、changed-path detection 或独立 workflow gate 延后启动。不要让一个已知会失败的 Fast Gate 同时启动多个昂贵构建。
 
-只有日志明显匹配 Runner、网络、DNS、502/503/504、连接重置等瞬时故障时，Agent 才允许一次受限 fresh rerun。无论是否 rerun，只要没有确定性修复，问题仍必须生成 AI Repair Brief，防止故障被重跑掩盖。
+## 5. Concurrency v4
 
-## 5. AI 接手后的强制边界
+推荐普通 CI：
 
-接手 AI 应：
+```yaml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+```
 
-- 先确认源 Commit 是否已被更新提交取代；
-- 阅读完整日志，不只依赖摘要；
-- 使用独立修复分支，默认禁止直接写 `main`；
-- 运行原失败测试、相关回归测试、Policy Check；
-- PR 中写清根因、修改、验证、剩余风险；
-- Release / Deploy / Publish / Store Package 禁止盲目重放。
+这样高频 PR 只保留最新 SHA；默认分支 push 已经开始的正式验证不会被后续 push 强杀。
 
-## 6. 重新运行不等于修复
+Release / Deploy / Publish：
 
-Re-run 仍然执行原始代码。如果根因在代码里，单纯重跑只会重复错误。因此 GitHub Agent 只把 rerun 用作受限的瞬时环境恢复；代码问题必须产生新 Commit 后再验证。
+```yaml
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+```
 
-## 7. 版本与兼容
+Governor 同样遵守该边界：默认分支正在运行的普通验证不因 duplicate 规则被取消；旧 queued run 仍可清理。
 
-- 对外名称：**GitHub Agent v3**。
-- 旧名称：GitHub Actions 策略 v3（历史称呼）。
-- `actions-*` / `actions_strategy_*` 文件名继续作为内部兼容实现名称。
-- 新项目文档统一使用 `GITHUB_AGENT.md`。
+## 6. Node24 Actions 基线
+
+2026-09 起新模板使用 Node24-native 官方 action major：
+
+- `actions/checkout@v7`
+- `actions/setup-python@v7`
+- `actions/setup-node@v7`
+- `actions/setup-java@v6`
+- `actions/upload-artifact@v7`
+- `actions/download-artifact@v7`
+
+第三方 action 升级前必须确认其 Node24 兼容性。
+
+## 7. 重新运行不等于修复
+
+Re-run 仍执行原始代码。确定性失败继续重跑只会制造重复红灯并消耗 Runner。v4 的 Recovery 必须先分类，再决定 rerun、force-cancel、创建修复 PR 或生成 AI Repair Brief。
+
+## 8. AI 接手边界
+
+接手 AI 应先确认源 SHA 是否已被更新提交取代，读取完整日志，使用独立修复分支，运行原失败测试和相关回归测试，并在 PR 中写清根因、修改、验证和剩余风险。Release / Deploy / Publish 禁止盲目重放。
+
+## 9. 版本与兼容
+
+- 对外名称：**GitHub Agent v4**。
+- v3 文档和文件名继续作为历史兼容。
+- `actions-*` / `actions_strategy_*` 文件名继续作为内部实现名称。
+- 新项目统一从 `templates/` 复制 v4 基线，再按项目拆 Fast/Full/Path Gate。
