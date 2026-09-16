@@ -1,34 +1,25 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
   fast-gate:
-    name: Fast gate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: Syntax, lint, compile, and focused contracts
-        run: echo 'Replace with fast deterministic checks.'
-
+      - run: echo 'syntax/lint/compile/focused contracts'
   full-test:
-    name: Full test suite
     needs: fast-gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
-      - name: Run full tests
-        run: echo 'Replace with full tests; add path-aware heavy build jobs only after fast-gate succeeds.'
+      - run: echo 'full tests and path-aware heavy builds'
