@@ -21,8 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Syntax, lint, compile, and focused contracts
-        run: |
-          echo 'Replace with fast deterministic checks.'
+        run: echo 'Replace with fast deterministic checks.'
 
   full-test:
     name: Full test suite
@@ -32,8 +31,4 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Run full tests
-        run: |
-          # Python: setup-python@v7, pytest-timeout, then full pytest.
-          # Node: setup-node@v7, npm ci, then full tests.
-          # Add path-aware heavy build jobs only after fast-gate succeeds.
-          echo 'Replace with project full tests.'
+        run: echo 'Replace with full tests; add path-aware heavy build jobs only after fast-gate succeeds.'
