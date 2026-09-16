@@ -12,6 +12,7 @@ GitHub Agent v4 是面向高频开发仓库的 GitHub Actions 治理标准。
 - Fast Gate 先于 Full Gate；重型任务按改动路径选择执行。
 - 每个仓库只有一个最终 Release/Deploy/Publish authority；artifact/package build 不等于发布。
 - **尊重仓库自身的 PR-only main policy**：GitHub Agent 的治理/修复提交也必须走分支 + PR，不能为了修 CI 绕过仓库治理。
+- **Workflow 也是 contract**：如果 tests 会读取 `.github/workflows/*.yml`，修改 CI 拓扑时必须在同一 PR 更新这些 contract tests；这类 assertion failure 属于确定性代码/测试问题，不属于 Runner 故障。
 
 ## 失败分类
 
@@ -51,7 +52,11 @@ Release/Deploy/Publish 使用串行 group 和 `cancel-in-progress: false`。
 
 ## Node24 baseline
 
-`actions/checkout@v7`、`actions/setup-python@v7`、`actions/setup-node@v7`、`actions/setup-java@v6`、`actions/upload-artifact@v7`、`actions/download-artifact@v7`。
+基础 Actions：`actions/checkout@v7`、`actions/setup-python@v7`、`actions/setup-node@v7`、`actions/setup-java@v6`、`actions/upload-artifact@v7`、`actions/download-artifact@v7`。
+
+Android：使用 `android-actions/setup-android@v4`，并显式设置 `packages: platform-tools`；不要沿用默认包含 obsolete `tools` 的 package 列表。平台/build-tools 用后续 `sdkmanager` 显式安装。
+
+GitHub Release：`softprops/action-gh-release@v3` 为 Node24；不要继续使用 Node20 的 v2。
 
 ## AI 接手边界
 
