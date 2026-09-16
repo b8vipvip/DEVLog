@@ -18,8 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build and publish
         run: |
           echo 'Replace with release build and publish commands.'
-          echo 'The repository Actions Governor still applies a 180-minute hard cap.'
+          echo 'Release/Deploy/Publish must remain a single serial authority.'
