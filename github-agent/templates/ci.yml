@@ -11,8 +11,6 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  # High-frequency PRs keep only the newest SHA. A validation already running on
-  # the default branch is allowed to finish instead of being killed by a new push.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -22,8 +20,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-
-      # Add runtime setup here, for example setup-python@v7 / setup-node@v7.
       - name: Syntax, lint, compile, and focused contracts
         run: |
           echo 'Replace with fast deterministic checks.'
@@ -37,10 +33,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Run full tests
         run: |
-          # Python example:
-          # python -m pip install -r requirements.txt pytest-timeout
-          # pytest -q --timeout=120
-          # Node example:
-          # npm ci
-          # npm test
+          # Python: setup-python@v7, pytest-timeout, then full pytest.
+          # Node: setup-node@v7, npm ci, then full tests.
+          # Add path-aware heavy build jobs only after fast-gate succeeds.
           echo 'Replace with project full tests.'
