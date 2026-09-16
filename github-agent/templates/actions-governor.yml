@@ -1,5 +1,8 @@
 name: Actions Governor
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/actions-governor.yml', '.github/workflows/actions-recovery.yml', '.github/workflows/actions-policy-check.yml', '.github/scripts/actions_strategy_autofix.py', '.github/scripts/validate_actions_strategy.py', '.github/ACTIONS_STRATEGY.md']
   schedule:
     - cron: '*/10 * * * *'
   workflow_dispatch:
