@@ -22,4 +22,4 @@ jobs:
       - name: Build and publish
         run: |
           echo 'Replace with release build and publish commands.'
-          echo 'Release/Deploy/Publish must remain a single serial authority.'
+          echo 'This workflow is the single final Release/Deploy/Publish authority.'
