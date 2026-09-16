@@ -11,6 +11,7 @@ GitHub Agent v4 是面向高频开发仓库的 GitHub Actions 治理标准。
 - PR 只保留最新 SHA；默认分支已经运行的正式验证允许完成。
 - Fast Gate 先于 Full Gate；重型任务按改动路径选择执行。
 - 每个仓库只有一个最终 Release/Deploy/Publish authority；artifact/package build 不等于发布。
+- **尊重仓库自身的 PR-only main policy**：GitHub Agent 的治理/修复提交也必须走分支 + PR，不能为了修 CI 绕过仓库治理。
 
 ## 失败分类
 
@@ -18,13 +19,11 @@ GitHub Agent v4 是面向高频开发仓库的 GitHub Actions 治理标准。
 
 ## Governor v4
 
-L0 Governor 清理 duplicate/stale/ghost run。普通 cancel 后重新读取状态；仍 queued/in_progress 才调用 force-cancel。queued 且无 job 的 run 不触发 Recovery。force-cancel 仍被 GitHub 拒绝时标记平台 ghost，并限制每轮尝试数量。PR/feature branch 旧 SHA 可以淘汰，默认分支已经 in-progress 的普通验证不因 duplicate 规则被强杀。
+普通 cancel 后重新读取状态；仍 queued/in_progress 才调用 force-cancel。queued 且无 job 的 run 不触发 Recovery。force-cancel 仍被 GitHub 拒绝时标记平台 ghost，并限制每轮尝试数量。PR/feature branch 旧 SHA 可以淘汰，默认分支已经 in-progress 的普通验证不因 duplicate 规则被强杀。
 
 ## Recovery
 
-L1 `actions_strategy_autofix.py` 只修机械可判断的 workflow 缺陷。L2 项目可提供 `.github/actions-recovery.sh` 执行已知、幂等的确定性修复。L3 无法机械修复时创建 `[GitHub Agent][AI Repair] <workflow> run <run_id>`，交给用户选择的 AI。
-
-Recovery 先分类；只有明显的瞬时基础设施故障且没有确定性失败信号时才允许一次 fresh rerun。Release/Deploy/Publish 不盲目 replay。
+`actions_strategy_autofix.py` 只修机械可判断的 workflow 缺陷；项目可提供 `.github/actions-recovery.sh` 执行已知、幂等的确定性修复；无法机械修复时创建 `[GitHub Agent][AI Repair] <workflow> run <run_id>`。只有明显的瞬时基础设施故障且没有确定性失败信号时才允许一次 fresh rerun。Release/Deploy/Publish 不盲目 replay。
 
 ## CI 拓扑
 
@@ -56,4 +55,4 @@ Release/Deploy/Publish 使用串行 group 和 `cancel-in-progress: false`。
 
 ## AI 接手边界
 
-先确认源 SHA 是否已被更新提交取代，读取完整日志，使用独立修复分支，运行原失败测试和相关回归测试，并在 PR 中写清根因、修改、验证和剩余风险。
+先确认源 SHA 是否已被更新提交取代，读取完整日志，遵守仓库分支/PR 策略，运行原失败测试和相关回归测试，并在 PR 中写清根因、修改、验证和剩余风险。
