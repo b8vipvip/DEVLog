@@ -4,18 +4,26 @@
 
 ## 结论
 
-近期红灯由三类问题叠加：确定性代码/测试失败、Workflow 拓扑放大、GitHub 平台 ghost run 残留。GitHub Agent v4 已完成标准层整改：失败分类、PR-aware concurrency、Fast Gate -> Full Gate、path-aware heavy builds、Governor force-cancel、Single Release Authority、Node24-native baseline。
+近期红灯由三类问题叠加：确定性代码/测试失败、Workflow 拓扑放大、GitHub 平台 ghost run 残留。GitHub Agent v4 已完成标准层整改：失败分类、PR-aware concurrency、Fast Gate -> Full Gate、path-aware heavy builds、Governor ghost handling、Single Release Authority、Node24-native baseline。
 
-- **GPTWork**：最高优先级。长期 queued 且无 job 的 ghost runs；v3 普通 cancel 无法清理；Store Package 过早启动并被误判为 release 类；多个 workflow 缺 timeout/concurrency。
-- **qnbot**：同一提交在 API CI 与 Windows build 重复跑 static tests，一个 assertion failure 被放大成多条红灯；缺 path gate/concurrency/timeout；旧 action major 待迁移。
-- **chat2api**：基础治理较完整；重点是 contract migration guard、历史 ghost cleanup 和 release gate 优化。
-- **fdex**：重点是去 push+PR 双触发、path gate、timeout/concurrency 和单一 release authority。
+### 已确认的 GitHub 平台 ghost
+
+GPTWork Governor v4 首次实测扫描 40 个 active run，其中识别出 34 个长期 queued/no-job ghost。它先调用普通 cancel，再调用 GitHub 官方 force-cancel；GitHub 对这些旧 run **两种取消都拒绝**。代表 run：`34749340867`（Store Package）。因此这些历史 run 已不能由仓库内 workflow 自愈，属于 `GITHUB_PLATFORM_GHOST`；如需从 Actions UI/后端彻底移除，需要 GitHub 平台侧处理。
+
+为避免 Governor 自己每 10 分钟耗费数分钟反复撞同一批平台 ghost，v4 模板将每轮 ghost force-cancel 尝试限制为 5 个，并确保同一 pass 不重复尝试。平台 ghost 不进入代码 Recovery，也不计入代码失败率。
+
+## 四仓库整改重点
+
+- **GPTWork**：Governor v4 已落地；Store Package 已增加 path filter、PR-aware concurrency、timeout 和 Node24-native actions；License Server、Private Core Boundary 已补 timeout/concurrency/手动恢复入口。历史平台 ghost 保留为平台异常证据。
+- **qnbot**：Windows release build 已移除与 API CI 重复的 repository static tests，加入 path filter、PR-aware concurrency、timeout、Node24-native actions；Windows CI 同步升级。
+- **chat2api**：Governor v4 已落地并验证成功；后续重点仍是 contract migration guard 与 release gate 优化。
+- **fdex**：主 CI 已去掉 feature/fix/agent push + PR 双触发，改为 main push + PR，加入 PR-aware concurrency、timeout、Node24-native actions；后续继续做 path-aware Android/server gate 与 release authority 收敛。
 
 ## v4 规则
 
-失败分类：`DETERMINISTIC_TEST`、`WORKFLOW_CONFIG`、`INFRA_TRANSIENT`、`GHOST_RUN`、`SUPERSEDED`、`SIDE_EFFECTFUL`。
+失败分类：`DETERMINISTIC_TEST`、`WORKFLOW_CONFIG`、`INFRA_TRANSIENT`、`GHOST_RUN`、`GITHUB_PLATFORM_GHOST`、`SUPERSEDED`、`SIDE_EFFECTFUL`。
 
-Governor：`normal cancel -> recheck -> force-cancel`；jobless ghost 不进入代码 Recovery；默认分支已经 in-progress 的正式验证不因 duplicate 被强杀。
+Governor：`normal cancel -> recheck -> force-cancel`。如果 force-cancel 仍被 GitHub 拒绝，则标记 `GITHUB_PLATFORM_GHOST` 并限流，不进入代码 Recovery。默认分支已经 in-progress 的正式验证不因 duplicate 被强杀。
 
 普通 CI：
 
@@ -31,9 +39,9 @@ CI：Fast Gate 成功后再运行完整 pytest/Docker/Android/Windows/package，
 
 Node24 baseline：`checkout@v7`、`setup-python@v7`、`setup-node@v7`、`setup-java@v6`、`upload-artifact@v7`、`download-artifact@v7`。
 
-## 落地顺序
+## 下一阶段
 
-1. GPTWork：Governor v4 + ghost cleanup + Store Package gate + timeout/concurrency。
-2. qnbot：Fast Gate + 去重复 static tests + path gate + Node24 actions。
-3. chat2api：Governor v4 + release gate + contract migration guard。
-4. fdex：concurrency/timeout + 去双触发 + path gate + 单一 release authority。
+1. GPTWork：继续收敛 housekeeping/release 触发面，避免 workflow-only commit 启动无关 Release。
+2. qnbot：继续拆 API Fast Gate 与重型 build path gate。
+3. chat2api：增加 contract migration guard，优化 release event gate。
+4. fdex：Android/server path gate 与单一 release authority。
