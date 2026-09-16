@@ -11,6 +11,7 @@ GitHub Agent v4 是面向高频开发仓库的 GitHub Actions 治理标准。
 - PR 只保留最新 SHA；默认分支已经运行的正式验证允许完成。
 - Fast Gate 先于 Full Gate；重型任务按改动路径选择执行。
 - 每个仓库只有一个最终 Release/Deploy/Publish authority；artifact/package build 不等于发布。
+- 同一平台、同一产品路径不要保留两套功能重叠的重型 build authority；如果 Release build 已覆盖编译、平台测试、完整包校验和发布上游，就不要再为相同改动并行跑一套仅配置不同的 Debug/Release MSBuild。
 - **尊重仓库自身的 PR-only main policy**：GitHub Agent 的治理/修复提交也必须走分支 + PR，不能为了修 CI 绕过仓库治理。
 - **Workflow 也是 contract**：如果 tests 会读取 `.github/workflows/*.yml`，修改 CI 拓扑时必须在同一 PR 更新这些 contract tests；这类 assertion failure 属于确定性代码/测试问题，不属于 Runner 故障。
 
@@ -54,6 +55,12 @@ concurrency:
 
 Release/Deploy/Publish 使用串行 group 和 `cancel-in-progress: false`。
 
+### 重型构建 authority 收敛
+
+对 Windows/Android/Docker 等高成本构建，先按“产品路径 × 平台 × 最终用途”审计重叠。两条 workflow 如果在同一改动上都做依赖恢复、编译和 artifact 上传，而其中一条已经额外覆盖平台测试、发布包完整性和 Release 上游，则优先保留能力更完整的一条作为单一 build authority。
+
+不要为了保留一个历史 check 名称而永久支付第二次完整编译成本。确有独立价值的快速检查应拆成真正轻量的 Fast Gate，而不是再跑一次完整 MSBuild/Gradle/Docker build。
+
 ## workflow_run 与发布降噪
 
 `workflow_run` 的分支限制应尽量放在触发器本身，例如：
@@ -69,6 +76,10 @@ on:
 不要只在 job `if:` 中判断 `head_branch == main`。后者仍会为每个 PR 完成事件创建一个最终 `skipped` 的 workflow run，继续污染 Actions 列表和运行统计。
 
 如果重型 build 的 `paths` 包含 workflow 文件本身，那么纯 CI 改动也可能成功触发 build。下游自动 Release 不能把“build 成功”直接等同于“产品需要发布”；应增加 release eligibility gate，确认 source commit/range 实际修改了产品路径后才创建版本。`workflow_dispatch` 可以保留为人工显式发布入口。
+
+自动 Release 由 `workflow_run` 触发时，发布侧 checkout 必须固定到 `github.event.workflow_run.head_sha`，不要 checkout 当时最新的默认分支。否则 build artifact 来自已验证 SHA，而 rescue script、manifest helper 或其它发布侧文件可能来自更晚的默认分支提交，破坏可复现性。人工 `workflow_dispatch` 可按仓库策略显式解析当前默认分支或指定 source SHA。
+
+如果 release eligibility 使用 GitHub Compare API 的 `.files` 判断产品路径，要考虑 Compare 文件列表最多返回 300 个文件的边界。达到 300 时不能把“返回列表里没看到产品文件”当成确定的无产品改动；标准策略应 fail safe，允许进入后续发布校验或使用其它不截断的范围检查，宁可多一次安全发布，也不要静默漏发产品变更。
 
 最终 Release authority 应直接上传稳定版本所需的全部标准资产。不要为了给同一个 Release 再挂一个固定 rescue/manifest/helper 资产，就在 Publish 完成后链式启动第二条 workflow；这会让 skipped/no-op publish 也产生连锁 run。独立资产 workflow 更适合“该资产自身发生变化时，回写当前最新稳定版本”的场景。
 
