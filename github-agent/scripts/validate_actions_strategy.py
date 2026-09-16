@@ -6,8 +6,6 @@ import re
 import sys
 from pathlib import Path
 
-# Only workflows that can publish/deploy/create or mutate releases are treated as
-# side-effectful by name. Artifact/package builds are intentionally ordinary.
 PROTECTED_WORDS = ("release", "deploy", "publish")
 DEBUG_WORDS = ("debug", "diagnostic", "one-shot", "oneshot", "tmp-")
 
