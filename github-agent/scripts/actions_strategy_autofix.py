@@ -5,7 +5,7 @@ import argparse
 import re
 from pathlib import Path
 
-PROTECTED_WORDS = ("release", "deploy", "publish", "store package", "store-package")
+PROTECTED_WORDS = ("release", "deploy", "publish")
 INTERNAL_FILES = {"actions-governor.yml", "actions-recovery.yml", "actions-policy-check.yml"}
 
 
@@ -55,7 +55,7 @@ def main() -> int:
             if protected:
                 additions.append("concurrency:\n  group: ${{ github.workflow }}-${{ github.repository }}\n  cancel-in-progress: false\n\n")
             else:
-                additions.append("concurrency:\n  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}\n  cancel-in-progress: true\n\n")
+                additions.append("concurrency:\n  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}\n  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n\n")
         lines[insert_at:insert_at] = additions
         text = "".join(lines)
 
