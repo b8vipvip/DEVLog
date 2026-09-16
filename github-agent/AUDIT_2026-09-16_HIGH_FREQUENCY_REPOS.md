@@ -1,6 +1,6 @@
 # GitHub Actions 高频仓库审计与整改（2026-09-16）
 
-对象：`chat2api`、`GPTWork`、`fdex`、`qnbot`。状态：**整改实施中**。
+对象：`chat2api`、`GPTWork`、`fdex`、`qnbot`。状态：**整改实施中；GPTWork 按用户要求暂停后续改造**。
 
 ## 已确认的 GitHub 平台 ghost
 
@@ -10,14 +10,32 @@ GPTWork Governor v4 首次实测扫描 40 个 active run，其中识别出 34 �
 
 ## 四仓库整改进度
 
-- **GPTWork**：Governor v4 已落地；Store Package 已增加 path filter、PR-aware concurrency、timeout 和 Node24-native actions；License Server、Private Core Boundary 已补 timeout/concurrency/手动恢复入口。历史平台 ghost 保留为平台异常证据。
-- **qnbot**：Windows release build 已移除与 API CI 重复的 repository static tests，加入 path filter、PR-aware concurrency、timeout、Node24-native actions；Windows CI 同步升级，两次对应 Actions 已验证成功。
-- **chat2api**：Governor v4 已落地且对应 Actions 验证成功；后续重点是 contract migration guard 与 release gate 优化。
-- **fdex**：主 CI 已去掉 feature/fix/agent push + PR 双触发，改为 main push + PR，加入 PR-aware concurrency、timeout、Node24-native actions；对应 Android/FastAPI CI 已验证成功。
+- **GPTWork**：第一阶段 Governor v4 等治理已落地；后续改造暂停，不作为当前阶段阻塞项。
+- **qnbot**：API control plane 已改成 `Fast Gate -> Windows Static Gate -> Full Gate`。Fast Gate 先跑 repository static tests、shell syntax、Python compile、browser JS syntax；重型 pytest/Docker/OCR smoke/package 只在快速检查通过后启动。迁移时同步更新了依赖 workflow 文本的 static contract tests，避免“CI 语义已变、旧测试仍断言旧命令”的确定性红灯。
+- **chat2api**：response/runtime contract migration guard 已落地并合并。关键 runtime ownership 文件变化时要求同一变更同步 contract tests；测试若仍实际读取已删除的 `chrome_extension/*.js` 会直接报 `CONTRACT_MIGRATION`，不用等待完整 pytest 才暴露一组重复失败。
+- **fdex**：Build and Test 已加入 Path Gate，Android/server 按 diff 独立启动；发布链路收敛为 `main CI success -> Auto Tag -> Release Android APK`，只有 tag-triggered Release workflow 负责签名、APK 构建和 GitHub Release，消除双 release authority。
 
 ## 落地过程新增规则
 
-GPTWork 自身有 `Repository housekeeping -> Audit PR-only main changes`。直接写 main 的 GitHub Agent 维护提交会被该策略正确标红。因此从本轮后续开始，**只要目标仓库声明 PR-only main policy，GitHub Agent 自身的治理改动也必须走分支 + PR；不能为了修 CI 绕过仓库自己的治理策略。** 这条规则纳入 v4。
+### PR-only policy
+
+只要目标仓库声明 PR-only main policy，GitHub Agent 自身的治理改动也必须走分支 + PR；不能为了修 CI 绕过仓库治理。
+
+### Workflow 也是 contract
+
+如果仓库存在直接读取 `.github/workflows/*.yml` 的 static tests，修改 CI 拓扑时必须在同一 PR 更新这些 contract tests。不能把这类失败误判成 GitHub Runner 故障，也不允许盲目 rerun。
+
+### Android setup Node24
+
+`android-actions/setup-android@v3` 仍以 Node20 为目标；在 GitHub 强制 Node24 后会产生弃用告警。当前使用 `android-actions/setup-android@v4`。此外 v4 默认 `packages` 仍包含已从现代 SDK repository 移除的 `tools`，会导致 `sdkmanager tools` 返回 `Failed to find package 'tools'`。标准写法显式指定：
+
+```yaml
+- uses: android-actions/setup-android@v4
+  with:
+    packages: platform-tools
+```
+
+需要的平台/build-tools 再由后续 `sdkmanager` 明确安装。
 
 ## v4 分类
 
@@ -35,11 +53,11 @@ concurrency:
 
 CI：Fast Gate 成功后再运行完整 pytest/Docker/Android/Windows/package，并按改动路径选择重型任务。发布 workflow 使用单一最终 authority；artifact/package build 不等于发布。
 
-Node24 baseline：`checkout@v7`、`setup-python@v7`、`setup-node@v7`、`setup-java@v6`、`upload-artifact@v7`、`download-artifact@v7`。
+Node24 baseline：`checkout@v7`、`setup-python@v7`、`setup-node@v7`、`setup-java@v6`、`upload-artifact@v7`、`download-artifact@v7`；Android 使用 `android-actions/setup-android@v4` 且显式避开 obsolete `tools` package。
 
-## 下一阶段
+## 当前阶段
 
-1. GPTWork：后续治理改动改走 PR；继续收敛 housekeeping/release 触发面。
-2. qnbot：继续拆 API Fast Gate 与重型 build path gate。
-3. chat2api：增加 contract migration guard，优化 release event gate。
-4. fdex：Android/server path gate 与单一 release authority。
+1. GPTWork：暂停后续改造。
+2. qnbot：Fast Gate/Full Gate 已实施，等待完整重型验证全绿后合并。
+3. chat2api：contract migration guard 已通过 Policy Check、专用 Guard 与完整 CI，并已合并。
+4. fdex：Path Gate + Single Release Authority 已实施；首次验证发现 `setup-android@v3` / obsolete `tools` 问题，已升级 v4 并显式 `packages: platform-tools`，等待最终 CI 全绿后合并。
