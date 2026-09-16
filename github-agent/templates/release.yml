@@ -3,8 +3,7 @@ name: Release
 on:
   workflow_dispatch:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
 
 permissions:
   contents: write
@@ -20,6 +19,4 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Build and publish
-        run: |
-          echo 'Replace with release build and publish commands.'
-          echo 'This workflow is the single final Release/Deploy/Publish authority.'
+        run: echo 'This workflow is the single final Release/Deploy/Publish authority; replace with project commands.'
