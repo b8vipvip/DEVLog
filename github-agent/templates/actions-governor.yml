@@ -4,7 +4,9 @@ on:
     branches: [main]
     paths: ['.github/workflows/actions-governor.yml', '.github/workflows/actions-recovery.yml', '.github/workflows/actions-policy-check.yml', '.github/scripts/actions_strategy_autofix.py', '.github/scripts/validate_actions_strategy.py', '.github/ACTIONS_STRATEGY.md']
   schedule:
-    - cron: '*/10 * * * *'
+    # Hourly is enough for stale/ghost cleanup; concurrency handles hot-path superseding.
+    # Avoid a */10 schedule, which creates 144 Governor runs per repository per day.
+    - cron: '17 * * * *'
   workflow_dispatch:
 permissions:
   actions: write
