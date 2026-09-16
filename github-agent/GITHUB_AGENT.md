@@ -54,6 +54,24 @@ concurrency:
 
 Release/Deploy/Publish 使用串行 group 和 `cancel-in-progress: false`。
 
+## workflow_run 与发布降噪
+
+`workflow_run` 的分支限制应尽量放在触发器本身，例如：
+
+```yaml
+on:
+  workflow_run:
+    workflows: ["Build and Test"]
+    types: [completed]
+    branches: [main]
+```
+
+不要只在 job `if:` 中判断 `head_branch == main`。后者仍会为每个 PR 完成事件创建一个最终 `skipped` 的 workflow run，继续污染 Actions 列表和运行统计。
+
+如果重型 build 的 `paths` 包含 workflow 文件本身，那么纯 CI 改动也可能成功触发 build。下游自动 Release 不能把“build 成功”直接等同于“产品需要发布”；应增加 release eligibility gate，确认 source commit/range 实际修改了产品路径后才创建版本。`workflow_dispatch` 可以保留为人工显式发布入口。
+
+最终 Release authority 应直接上传稳定版本所需的全部标准资产。不要为了给同一个 Release 再挂一个固定 rescue/manifest/helper 资产，就在 Publish 完成后链式启动第二条 workflow；这会让 skipped/no-op publish 也产生连锁 run。独立资产 workflow 更适合“该资产自身发生变化时，回写当前最新稳定版本”的场景。
+
 ## Node24 baseline
 
 基础 Actions：`actions/checkout@v7`、`actions/setup-python@v7`、`actions/setup-node@v7`、`actions/setup-java@v6`、`actions/upload-artifact@v7`、`actions/download-artifact@v7`。
