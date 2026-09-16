@@ -48,21 +48,7 @@ jobs:
 
           {
             for status_filter in in_progress queued; do
-              gh api --paginate \
-                "repos/${repo}/actions/runs?status=${status_filter}&per_page=100" \
-                --jq '.workflow_runs[] | [
-                  (.created_at // ""),
-                  (.id | tostring),
-                  (.workflow_id | tostring),
-                  (.name // ""),
-                  (.head_branch // ""),
-                  (.head_sha // ""),
-                  (.event // ""),
-                  (.status // ""),
-                  (.run_started_at // .created_at // ""),
-                  (.path // ""),
-                  (.run_attempt | tostring)
-                ] | join("\u001f")'
+              gh api --paginate "repos/${repo}/actions/runs?status=${status_filter}&per_page=100" --jq '.workflow_runs[] | [(.created_at // ""), (.id | tostring), (.workflow_id | tostring), (.name // ""), (.head_branch // ""), (.head_sha // ""), (.event // ""), (.status // ""), (.run_started_at // .created_at // ""), (.path // ""), (.run_attempt | tostring)] | join("\u001f")'
             done
           } | LC_ALL=C sort -r > "$runs_file"
 
@@ -85,23 +71,17 @@ jobs:
             lower="$(lower_name "$1")"
             [[ "$lower" == "actions governor" || "$lower" == "actions recovery" || "$lower" == "actions policy check" ]]
           }
-          run_status() {
-            gh api "repos/${repo}/actions/runs/$1" --jq '.status' 2>/dev/null || echo unknown
-          }
-          jobs_count() {
-            gh api "repos/${repo}/actions/runs/$1/jobs?filter=latest&per_page=1" --jq '.total_count // 0' 2>/dev/null || echo 0
-          }
+          run_status() { gh api "repos/${repo}/actions/runs/$1" --jq '.status' 2>/dev/null || echo unknown; }
+          jobs_count() { gh api "repos/${repo}/actions/runs/$1/jobs?filter=latest&per_page=1" --jq '.total_count // 0' 2>/dev/null || echo 0; }
 
           cancel_run() {
             local id="$1" reason="$2" name="$3"
             [[ -n "${resolved[$id]:-}" ]] && return 0
-
             if gh api --method POST "repos/${repo}/actions/runs/${id}/cancel" >/dev/null 2>&1; then
               echo "::notice::Requested normal cancellation for run ${id} (${name}): ${reason}"
             else
               echo "::warning::Normal cancellation was rejected for run ${id} (${name}); checking for ghost state."
             fi
-
             sleep 2
             local status_now
             status_now="$(run_status "$id")"
@@ -114,30 +94,15 @@ jobs:
                 return 1
               fi
             fi
-
             resolved[$id]=1
             resolved_count=$((resolved_count + 1))
-            return 0
           }
 
           dispatch_recovery() {
             local id="$1" workflow_id="$2" name="$3" branch="$4" head_sha="$5" event="$6" workflow_path="$7" run_attempt="$8" reason="$9"
             internal_strategy_workflow "$name" && return 0
-            if gh workflow run actions-recovery.yml \
-              --repo "$repo" --ref "$default_branch" \
-              -f source_run_id="$id" \
-              -f source_workflow_id="$workflow_id" \
-              -f source_workflow_name="$name" \
-              -f source_branch="$branch" \
-              -f source_head_sha="$head_sha" \
-              -f source_event="$event" \
-              -f source_workflow_path="$workflow_path" \
-              -f source_run_attempt="$run_attempt" \
-              -f recovery_reason="$reason"; then
+            if gh workflow run actions-recovery.yml --repo "$repo" --ref "$default_branch" -f source_run_id="$id" -f source_workflow_id="$workflow_id" -f source_workflow_name="$name" -f source_branch="$branch" -f source_head_sha="$head_sha" -f source_event="$event" -f source_workflow_path="$workflow_path" -f source_run_attempt="$run_attempt" -f recovery_reason="$reason"; then
               recovery_count=$((recovery_count + 1))
-              echo "::notice::Dispatched Actions Recovery for run ${id} (${name})."
-            else
-              echo "::warning::Failed to dispatch Actions Recovery for run ${id} (${name})."
             fi
           }
 
@@ -161,27 +126,17 @@ jobs:
             started_epoch="$(date -u -d "$started" +%s)"
             age_minutes=$(( (now_epoch - started_epoch) / 60 ))
             count="$(jobs_count "$id")"
-
             if [[ "$status" == "queued" && "$count" == "0" && "$age_minutes" -ge "$GHOST_QUEUED_MINUTES" ]]; then
               ghost_count=$((ghost_count + 1))
               cancel_run "$id" "ghost queued run with no jobs aged ${age_minutes}m" "$name" || true
               continue
             fi
-
             max_minutes="$DEFAULT_MAX_MINUTES"
-            if internal_strategy_workflow "$name"; then
-              max_minutes="$INTERNAL_MAX_MINUTES"
-            elif protected_serial_workflow "$name"; then
-              max_minutes="$PROTECTED_MAX_MINUTES"
-            fi
+            if internal_strategy_workflow "$name"; then max_minutes="$INTERNAL_MAX_MINUTES"; elif protected_serial_workflow "$name"; then max_minutes="$PROTECTED_MAX_MINUTES"; fi
             if (( age_minutes >= max_minutes )); then
               reason="stale ${status} run aged ${age_minutes}m (limit ${max_minutes}m)"
               if cancel_run "$id" "$reason" "$name"; then
-                if [[ "$count" -gt 0 ]]; then
-                  dispatch_recovery "$id" "$workflow_id" "$name" "$branch" "$head_sha" "$event" "$workflow_path" "$run_attempt" "$reason"
-                else
-                  echo "::notice::Run ${id} had no jobs; classified as GHOST_RUN and Recovery was skipped."
-                fi
+                if [[ "$count" -gt 0 ]]; then dispatch_recovery "$id" "$workflow_id" "$name" "$branch" "$head_sha" "$event" "$workflow_path" "$run_attempt" "$reason"; fi
               fi
             fi
           done < "$runs_file"
