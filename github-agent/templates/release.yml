@@ -1,22 +1,17 @@
 name: Release
-
 on:
   workflow_dispatch:
   push:
     tags: ['v*']
-
 permissions:
   contents: write
-
 concurrency:
   group: project-release
   cancel-in-progress: false
-
 jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
-      - name: Build and publish
-        run: echo 'This workflow is the single final Release/Deploy/Publish authority; replace with project commands.'
+      - run: echo 'Single final Release/Deploy/Publish authority; replace with project commands.'
