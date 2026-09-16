@@ -1,20 +1,15 @@
 name: Debug - One Shot
-
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: debug-one-shot-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   debug:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: Diagnostic command
-        run: echo 'Replace with one bounded diagnostic command; never add automatic triggers.'
+      - run: echo 'One bounded diagnostic command; never add automatic triggers.'
