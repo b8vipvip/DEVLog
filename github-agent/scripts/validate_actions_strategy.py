@@ -6,7 +6,9 @@ import re
 import sys
 from pathlib import Path
 
-PROTECTED_WORDS = ("release", "deploy", "publish", "store package", "store-package")
+# Only workflows that can publish/deploy/create or mutate releases are treated as
+# side-effectful by name. Artifact/package builds are intentionally ordinary.
+PROTECTED_WORDS = ("release", "deploy", "publish")
 DEBUG_WORDS = ("debug", "diagnostic", "one-shot", "oneshot", "tmp-")
 
 
@@ -32,7 +34,7 @@ def validate(path: Path) -> list[str]:
     hay = f"{name} {path.name}".lower()
     protected = any(word in hay for word in PROTECTED_WORDS)
     debug = any(word in hay for word in DEBUG_WORDS)
-    errors = []
+    errors: list[str] = []
 
     on = block(text, "on")
     if on is None:
@@ -45,13 +47,20 @@ def validate(path: Path) -> list[str]:
 
     if block(text, "permissions") is None:
         errors.append("missing top-level permissions:")
+
     concurrency = block(text, "concurrency")
     if concurrency is None:
         errors.append("missing top-level concurrency:")
-    elif protected and "cancel-in-progress: false" not in concurrency:
-        errors.append("release/deploy/publish workflow must use cancel-in-progress: false")
-    elif not protected and "cancel-in-progress: true" not in concurrency:
-        errors.append("ordinary workflow must use cancel-in-progress: true")
+    else:
+        cancel_match = re.search(r"(?m)^\s+cancel-in-progress:\s*(.+?)\s*$", concurrency)
+        if cancel_match is None:
+            errors.append("concurrency is missing cancel-in-progress")
+        else:
+            cancel_value = cancel_match.group(1).strip()
+            if protected and cancel_value != "false":
+                errors.append("release/deploy/publish workflow must use cancel-in-progress: false")
+            elif not protected and cancel_value == "false":
+                errors.append("ordinary workflow must cancel superseded work; use true or a PR-aware expression")
 
     lines = text.splitlines(keepends=True)
     jobs_start = next((i for i, line in enumerate(lines) if re.match(r"^jobs:\s*(?:#.*)?$", line.rstrip("\n"))), None)
@@ -74,7 +83,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("paths", nargs="+", type=Path)
     args = parser.parse_args()
-    violations = []
+    violations: list[str] = []
     for path in args.paths:
         if path.suffix not in {".yml", ".yaml"}:
             continue
@@ -83,10 +92,10 @@ def main() -> int:
             violations.append(f"{path}:")
             violations.extend(f"  - {error}" for error in errors)
     if violations:
-        print("GitHub Actions Strategy v3 policy violations:", file=sys.stderr)
+        print("GitHub Agent v4 policy violations:", file=sys.stderr)
         print("\n".join(violations), file=sys.stderr)
         return 1
-    print("GitHub Actions Strategy v3 policy check passed.")
+    print("GitHub Agent v4 policy check passed.")
     return 0
 
 
